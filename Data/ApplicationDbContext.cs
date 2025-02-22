@@ -16,9 +16,12 @@ namespace Sciencetopia.Data
         public DbSet<Conversation> Conversations { get; set; }
         public DbSet<Notification> Notifications { get; set; }
         public DbSet<VisitLog> VisitLogs { get; set; } // New VisitLog DbSet
-
         // Add the DailySummaries DbSet
         public DbSet<DailySummary> DailySummaries { get; set; }
+        // Add the KnowledgeNodes DbSet
+        public DbSet<KnowledgeNode> KnowledgeNodes { get; set; }
+        // Add the Tags DbSet
+        public DbSet<Tags> Tags { get; set; }
         
         protected override void OnModelCreating(ModelBuilder builder)
         {
