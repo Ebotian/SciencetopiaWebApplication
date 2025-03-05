@@ -22,7 +22,10 @@ public class HomeController : Controller
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
 
         // Log the visit with IP address
-        await _userActivityService.LogVisit(user?.Id, ipAddress);
+        if (ipAddress != null)
+        {
+            await _userActivityService.LogVisit(user?.Id, ipAddress);
+        }
 
         return View();
     }

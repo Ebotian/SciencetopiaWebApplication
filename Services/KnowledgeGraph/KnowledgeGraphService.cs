@@ -3,74 +3,254 @@ using Neo4j.Driver;
 public class KnowledgeGraphService
 {
     private readonly IDriver _driver;
+    private readonly IGraphRepository _graphRepository;
+    private readonly ISqlRepository _sqlRepository;
 
-    public KnowledgeGraphService(IDriver driver)
+    public KnowledgeGraphService(IDriver driver, IGraphRepository graphRepository, ISqlRepository sqlRepository)
     {
         _driver = driver;
+        _graphRepository = graphRepository;
+        _sqlRepository = sqlRepository;
     }
 
-    public async Task<List<object>> FetchKnowledgeGraphData()
+    public async Task<List<HierarchyRelationDTO>> BuildKnowledgeHierarchyRelationsAsync(List<KnowledgeNode> sqlNodes, List<Tags> sqlTags)
     {
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-        // Fetch knowledge nodes and their relationships
-        MATCH (n)-[r]->(m)
-        WHERE (n:Subject OR n:Field OR n:Topic OR n:Keyword) AND
-              (m:Subject OR m:Field OR m:Topic OR m:Keyword)
-        // Optionally match resources linked to these nodes
-        OPTIONAL MATCH (n)-[:HAS_RESOURCE]->(nr:Resource)
-        OPTIONAL MATCH (m)-[:HAS_RESOURCE]->(mr:Resource)
-        WITH n, m, r, COLLECT(DISTINCT nr.link) AS nResources, COLLECT(DISTINCT mr.link) AS mResources
-        RETURN n AS sourceNode, m AS targetNode, r AS relationship, nResources, mResources
-        LIMIT 1000
-    ");
+        // 从 Neo4j 获取纯标签间的 CONTAIN 关系（uid 之间）
+        var tagContainRelations = await _graphRepository.GetPureTagContainRelationsAsync();
 
-        var data = new List<object>();
+        // 构造 Tag uid -> Tag Name 映射（通过 SQL 中的 Tags 表）
+        // 注意：将 Guid 转换为 string
+        var tagUidToName = sqlTags.ToDictionary(t => t.Id.ToString(), t => t.Name);
 
-        await foreach (var record in result)
+        // 构造映射：标签知识节点的 Title（应与标签名称一致） -> 节点 id
+        var tagNameToNodeId = sqlNodes
+            .Where(n => n.Name != null && tagUidToName.Values.Contains(n.Name))
+            .ToDictionary(n => n.Name!, n => n.Id.ToString());
+
+        var hierarchyRelations = new List<HierarchyRelationDTO>();
+        foreach (var relation in tagContainRelations)
         {
-            var sourceNode = record["sourceNode"].As<INode>();
-            var targetNode = record["targetNode"].As<INode>();
-            var relationship = record["relationship"].As<IRelationship>();
-            var nResources = record["nResources"].As<List<string>>();
-            var mResources = record["mResources"].As<List<string>>();
-
-            data.Add(new
+            if (relation.ParentTagId != null && relation.ChildTagId != null &&
+                tagUidToName.TryGetValue(relation.ParentTagId, out var parentTagName) &&
+                tagUidToName.TryGetValue(relation.ChildTagId, out var childTagName))
             {
-                source = new
+                if (parentTagName != null && childTagName != null &&
+                    tagNameToNodeId.TryGetValue(parentTagName, out var parentNodeId) &&
+                    tagNameToNodeId.TryGetValue(childTagName, out var childNodeId))
                 {
-                    Identity = sourceNode.Id,
-                    Labels = sourceNode.Labels.ToList(),
-                    Properties = new
+                    hierarchyRelations.Add(new HierarchyRelationDTO
                     {
-                        Name = sourceNode.Properties["name"].As<string>(),
-                        Description = sourceNode.Properties["description"].As<string>(),
-                    },
-                    Resources = nResources.Select(link => new { Link = link }).ToList()
-                },
-                target = new
-                {
-                    Identity = targetNode.Id,
-                    Labels = targetNode.Labels.ToList(),
-                    Properties = new
-                    {
-                        Name = targetNode.Properties["name"].As<string>(),
-                        Description = targetNode.Properties["description"].As<string>(),
-                    },
-                    Resources = mResources.Select(link => new { Link = link }).ToList()
-                },
-                relationship = new
-                {
-                    Identity = relationship.Id,
-                    Start = relationship.StartNodeId,
-                    End = relationship.EndNodeId,
-                    Type = relationship.Type
+                        ParentId = parentNodeId,
+                        ChildId = childNodeId
+                    });
                 }
-            });
+            }
+        }
+        return hierarchyRelations;
+    }
+
+    public async Task<GraphDTO> GetKnowledgeGraphDataAsync(string tagSystem)
+    {
+        // 1. 从 SQL 获取所有知识节点 id（假设已有 GetAllNodeIdsAsync 方法）
+        var allNodeIds = await _sqlRepository.GetAllNodeIdsAsync();
+        // 获取节点详情，不包含 TagLevel，因为知识节点表中没有这个列
+        var nodesDict = _sqlRepository.GetNodesDetails(allNodeIds);
+        // 转换成 NodeDTO 列表
+        var sqlNodes = nodesDict.Select(kvp => new NodeDTO
+        {
+            Id = kvp.Key,
+            Name = kvp.Value.Name,
+            Description = kvp.Value.Description,
+            CreatedDate = kvp.Value.CreatedDate.UtcDateTime,
+            UpdatedDate = kvp.Value.UpdatedDate.UtcDateTime,
+            TagLevel = "" // 这里先置空，后续赋值
+        }).ToList();
+
+        // 2. 从 SQL 获取所有 Tag 映射（包含 TagLevel 信息）
+        var sqlTags = await _sqlRepository.GetAllTagsAsync(); // List<Tags>
+                                                              // 构造标签名称到 TagLevel 的映射
+        var tagNameToTagLevel = sqlTags
+            .Where(t => !string.IsNullOrEmpty(t.Name))
+            .ToDictionary(t => t.Name!, t => t.TagLevel);
+
+        // 3. 根据节点名称来确定 TagLevel：
+        //    如果节点名称与某个 Tag 名称匹配，则节点的 TagLevel 为该 Tag 的 TagLevel；
+        //    否则默认为 "Keyword"
+        foreach (var node in sqlNodes)
+        {
+            if (node.Name != null && tagNameToTagLevel.TryGetValue(node.Name, out var tagLevel))
+            {
+                node.TagLevel = tagLevel;
+            }
+            else
+            {
+                node.TagLevel = "Keyword";
+            }
         }
 
-        return data;
+        // 4. 从 Neo4j 获取其它关系数据
+        var taggedRelations = await _graphRepository.GetTaggedRelationsAsync();
+        // var projectedRelations = await _graphRepository.GetProjectedRelationsAsync();
+        var projectedRelations = new List<ProjectedRelationDTO>(); // 假设这里返回的是空列表
+        var tagContainRelations = await _graphRepository.GetPureTagContainRelationsAsync();
+
+        // 5. 构造层次关系：利用纯标签 CONTAIN 关系转换为知识节点间的层次关系
+        // 构造映射：标签知识节点的 Title -> 节点 id（假设 SQL 中标签知识节点的 Title 与 Tag.Name 一致）
+        var tagNameToNodeId = sqlNodes
+            .Where(n => n.Name != null && tagNameToTagLevel.ContainsKey(n.Name))
+            .GroupBy(n => n.Name)
+            .ToDictionary(g => g.Key!, g => g.First().Id);
+
+        var hierarchyRelations = new List<HierarchyRelationDTO>();
+        foreach (var relation in tagContainRelations)
+        {
+            // relation.ParentTagId 和 ChildTagId 是纯标签 uid，
+            // 通过 sqlTags 中将 Guid 转为字符串来比较
+            var parentTagName = sqlTags.FirstOrDefault(t => t.Id.ToString() == relation.ParentTagId)?.Name;
+            var childTagName = sqlTags.FirstOrDefault(t => t.Id.ToString() == relation.ChildTagId)?.Name;
+            if (!string.IsNullOrEmpty(parentTagName) && !string.IsNullOrEmpty(childTagName))
+            {
+                if (tagNameToNodeId.TryGetValue(parentTagName, out var parentNodeId) &&
+                    tagNameToNodeId.TryGetValue(childTagName, out var childNodeId))
+                {
+                    hierarchyRelations.Add(new HierarchyRelationDTO
+                    {
+                        ParentId = parentNodeId,
+                        ChildId = childNodeId
+                    });
+                }
+            }
+        }
+
+        // 6. 处理 HAS_TAG（taggedRelations）关系：
+        // 对于每个 HAS_TAG 关系，原始定义中 tagged.SourceId 为 Keyword 节点，tagged.TagId 为标签 id
+        // 现在，我们希望把标签 id 替换为其对应的标签知识节点 id，即查找在 sqlNodes 中 TagLevel 为 "Topic" 且名称等于该标签名称的节点
+        var tagIdToName = sqlTags.ToDictionary(t => t.Id.ToString(), t => t.Name);
+        // 构造仅包含 Topic 节点的映射（名称 -> 节点 id），即标签知识节点
+        var topicNodesByName = sqlNodes
+            .Where(n => n.TagLevel == "Topic" && !string.IsNullOrEmpty(n.Name))
+            .GroupBy(n => n.Name)
+            .ToDictionary(g => g.Key, g => g.First().Id);
+
+        var replacedTaggedRelations = new List<HierarchyRelationDTO>();
+        foreach (var tagged in taggedRelations)
+        {
+            // tagged.SourceId 是 Keyword 节点 id
+            // tagged.TagId 为原始标签 id，替换为对应标签知识节点 id
+            if (tagIdToName.TryGetValue(tagged.TagId, out var tagName))
+            {
+                if (topicNodesByName.TryGetValue(tagName, out var topicNodeId))
+                {
+                    replacedTaggedRelations.Add(new HierarchyRelationDTO
+                    {
+                        ParentId = topicNodeId,  // Topic 知识节点作为父节点
+                        ChildId = tagged.SourceId  // Keyword 节点作为子节点
+                    });
+                }
+            }
+        }
+
+        // 7. 整合所有关系为 links
+        var linksDto = new List<LinkDTO>();
+        // 添加层次关系（CONTAIN）来自纯标签关系
+        linksDto.AddRange(hierarchyRelations.Select(r => new LinkDTO
+        {
+            Source = r.ParentId,
+            Target = r.ChildId,
+            Relation = "CONTAIN"
+        }));
+        // 添加投影关系
+        linksDto.AddRange(projectedRelations.Select(r => new LinkDTO
+        {
+            Source = r.SourceId,
+            Target = r.TargetId,
+            Relation = "projected",
+            Weight = r.Weight
+        }));
+        // // 添加原始的 HAS_TAG 关系（保留原始关系，若需要可省略）
+        // linksDto.AddRange(taggedRelations.Select(r => new LinkDTO
+        // {
+        //     Source = r.SourceId,
+        //     Target = r.TagId,
+        //     Relation = "TAGGED_WITH"
+        // }));
+        // 添加替换后的额外 CONTAIN 关系（Topic → Keyword），此时标签 id 已被替换
+        linksDto.AddRange(replacedTaggedRelations.Select(r => new LinkDTO
+        {
+            Source = r.ParentId,
+            Target = r.ChildId,
+            Relation = "CONTAIN"
+        }));
+
+        return new GraphDTO
+        {
+            Nodes = sqlNodes,
+            Links = linksDto
+        };
     }
+
+    // public async Task<List<object>> FetchKnowledgeGraphData()
+    // {
+    //     using var session = _driver.AsyncSession();
+    //     var result = await session.RunAsync(@"
+    //     // Fetch knowledge nodes and their relationships
+    //     MATCH (n)-[r]->(m)
+    //     WHERE (n:Subject OR n:Field OR n:Topic OR n:Keyword) AND
+    //           (m:Subject OR m:Field OR m:Topic OR m:Keyword)
+    //     // Optionally match resources linked to these nodes
+    //     OPTIONAL MATCH (n)-[:HAS_RESOURCE]->(nr:Resource)
+    //     OPTIONAL MATCH (m)-[:HAS_RESOURCE]->(mr:Resource)
+    //     WITH n, m, r, COLLECT(DISTINCT nr.link) AS nResources, COLLECT(DISTINCT mr.link) AS mResources
+    //     RETURN n AS sourceNode, m AS targetNode, r AS relationship, nResources, mResources
+    //     LIMIT 1000
+    // ");
+
+    //     var data = new List<object>();
+
+    //     await foreach (var record in result)
+    //     {
+    //         var sourceNode = record["sourceNode"].As<INode>();
+    //         var targetNode = record["targetNode"].As<INode>();
+    //         var relationship = record["relationship"].As<IRelationship>();
+    //         var nResources = record["nResources"].As<List<string>>();
+    //         var mResources = record["mResources"].As<List<string>>();
+
+    //         data.Add(new
+    //         {
+    //             source = new
+    //             {
+    //                 Identity = sourceNode.Id,
+    //                 Labels = sourceNode.Labels.ToList(),
+    //                 Properties = new
+    //                 {
+    //                     Name = sourceNode.Properties["name"].As<string>(),
+    //                     Description = sourceNode.Properties["description"].As<string>(),
+    //                 },
+    //                 Resources = nResources.Select(link => new { Link = link }).ToList()
+    //             },
+    //             target = new
+    //             {
+    //                 Identity = targetNode.Id,
+    //                 Labels = targetNode.Labels.ToList(),
+    //                 Properties = new
+    //                 {
+    //                     Name = targetNode.Properties["name"].As<string>(),
+    //                     Description = targetNode.Properties["description"].As<string>(),
+    //                 },
+    //                 Resources = mResources.Select(link => new { Link = link }).ToList()
+    //             },
+    //             relationship = new
+    //             {
+    //                 Identity = relationship.Id,
+    //                 Start = relationship.StartNodeId,
+    //                 End = relationship.EndNodeId,
+    //                 Type = relationship.Type
+    //             }
+    //         });
+    //     }
+
+    //     return data;
+    // }
 
     public async Task<object> SearchNodeAsync(string query)
     {

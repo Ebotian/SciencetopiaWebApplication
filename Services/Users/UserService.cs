@@ -33,7 +33,7 @@ public class UserService
         return avatarSasUrl;
     }
 
-    public async Task<UserInformationDTO> GetUserInfoByIdAsync(string userId)
+    public async Task<UserInformationDTO?> GetUserInfoByIdAsync(string userId)
     {
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
@@ -55,7 +55,7 @@ public class UserService
     public async Task<string> GetUserNameByIdAsync(string userId)
     {
         var user = await _userManager.FindByIdAsync(userId);
-        return user?.UserName; // Return the UserName if user exists, otherwise null
+        return user?.UserName ?? string.Empty; // Return the UserName if user exists, otherwise an empty string
     }
 
     private string GenerateBlobSasUri(BlobServiceClient blobServiceClient, string containerName, string blobName, int validMinutes = 30)

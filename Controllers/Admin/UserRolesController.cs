@@ -125,11 +125,13 @@ public class UserRoleController : ControllerBase
         }
 
         // Check if the user already exists
+        if (string.IsNullOrEmpty(model.Email)) return BadRequest("Email is required");
         var user = await _userManager.FindByEmailAsync(model.Email);
         if (user != null) return BadRequest("User already exists");
 
         // Create the admin user
         var adminUser = new ApplicationUser { UserName = model.UserName, Email = model.Email };
+        if (string.IsNullOrEmpty(model.Password)) return BadRequest("Password is required");
         var createUserResult = await _userManager.CreateAsync(adminUser, model.Password);
         if (!createUserResult.Succeeded) return BadRequest(createUserResult.Errors);
 

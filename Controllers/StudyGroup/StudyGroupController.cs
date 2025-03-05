@@ -301,6 +301,16 @@ public class StudyGroupController : ControllerBase
     {
         try
         {
+            if (string.IsNullOrEmpty(request.UserId))
+            {
+                return BadRequest("User ID is required.");
+            }
+
+            if (string.IsNullOrEmpty(request.GroupId))
+            {
+                return BadRequest("Group ID is required.");
+            }
+
             var result = await _studyGroupService.DissolveStudyGroup(request.UserId, request.GroupId);
 
             return Ok(new { message = "Study group successfully dissolved." });

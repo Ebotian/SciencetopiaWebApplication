@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 public class CustomUserValidator : UserValidator<ApplicationUser>
 {
-    public override async Task<IdentityResult> ValidateAsync(UserManager<ApplicationUser> manager, ApplicationUser user)
+    public override Task<IdentityResult> ValidateAsync(UserManager<ApplicationUser> manager, ApplicationUser user)
     {
         // Collect errors here. Start with the errors from the base class validation
         var errors = new List<IdentityError>();
@@ -19,7 +19,7 @@ public class CustomUserValidator : UserValidator<ApplicationUser>
         Regex regex = new Regex(usernameRegex, RegexOptions.CultureInvariant | RegexOptions.Singleline | RegexOptions.IgnoreCase);
 
         // Validate the username with the regex
-        if (!regex.IsMatch(user.UserName))
+        if (user.UserName == null || !regex.IsMatch(user.UserName))
         {
             errors.Add(new IdentityError
             {
@@ -28,6 +28,6 @@ public class CustomUserValidator : UserValidator<ApplicationUser>
         }
 
         // Return success if no errors, otherwise return failure with the list of errors
-        return errors.Count == 0 ? IdentityResult.Success : IdentityResult.Failed(errors.ToArray());
+        return Task.FromResult(errors.Count == 0 ? IdentityResult.Success : IdentityResult.Failed(errors.ToArray()));
     }
 }

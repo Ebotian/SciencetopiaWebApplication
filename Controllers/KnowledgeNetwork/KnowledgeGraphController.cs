@@ -27,20 +27,18 @@ namespace Sciencetopia.Controllers
         }
 
         [HttpGet("GetNodes")]
-        public async Task<IActionResult> GetKnowledgeGraph()
+        public async Task<IActionResult> GetKnowledgeGraph([FromQuery] string? tagSystem)
         {
             // Determine if the user is authenticated
             string userId = User?.Identity?.IsAuthenticated == true ? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty : string.Empty;
-            var data = await _knowledgeGraphService.FetchKnowledgeGraphData();
+            var data = await _knowledgeGraphService.GetKnowledgeGraphDataAsync(tagSystem ?? string.Empty);
             if (userId != string.Empty)
             {
-                var data_pending = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
-                return Ok(new { data, data_pending });
+            var data_pending = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
+            return Ok(new { data, data_pending });
             }
-            // var data = await _knowledgeGraphService.FetchKnowledgeGraphData(userId);
             return Ok(new { data });
         }
-
 
         [HttpGet("Search")]
         public async Task<IActionResult> SearchNode([FromQuery] string query)

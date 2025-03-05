@@ -6,6 +6,6 @@ public class LeaveGroupRequest
 
 public class DissolveGroupRequest
 {
-    public string UserId { get; set; }
-    public string GroupId { get; set; }
+    public string? UserId { get; set; }
+    public string? GroupId { get; set; }
 }

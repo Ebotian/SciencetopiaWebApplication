@@ -5,13 +5,13 @@ public class DailySummaryService
 {
     private readonly ApplicationDbContext _context;
     private readonly StudyGroupService? _studyGroupService;
-    private readonly KnowledgeGraphService? _knowledgeGraphService;
-
-    public DailySummaryService(ApplicationDbContext context, StudyGroupService? studyGroupService, KnowledgeGraphService? knowledgeGraphService)
+    // private readonly KnowledgeGraphService? _knowledgeGraphService;
+    private readonly ISqlRepository _sqlRepository;
+    public DailySummaryService(ApplicationDbContext context, StudyGroupService? studyGroupService, ISqlRepository sqlRepository)
     {
         _context = context;
         _studyGroupService = studyGroupService;
-        _knowledgeGraphService = knowledgeGraphService;
+        _sqlRepository = sqlRepository;
     }
 
     public async Task GenerateDailySummary(DateTime date)
@@ -42,12 +42,16 @@ public class DailySummaryService
             .CountAsync();
 
         // Retrieve Total Number of Knowledge Nodes
-        var nodes = await _knowledgeGraphService.FetchKnowledgeGraphData();
-        var KonwledgeNodesCount = nodes.Count;
-
+        // var nodes = await _sqlRepository.GetAllNodeIdsAsync();
+        // var KnowledgeNodesCount = nodes.Count();
+        var KnowledgeNodesCount = 0;
         // Retrieve Total Number of Study Groups
-        var groups = await _studyGroupService.GetAllStudyGroups();
-        var StudyGroupsCount = groups.Count;
+        var StudyGroupsCount = 0;
+        if (_studyGroupService != null)
+        {
+            var groups = await _studyGroupService.GetAllStudyGroups();
+            StudyGroupsCount = groups.Count;
+        }
 
         // // Retrieve Total Number of Active Study Groups
         // var activeGroups = await _studyGroupService.GetActiveStudyGroups();
@@ -67,7 +71,7 @@ public class DailySummaryService
             DailyVisits = DailyVisits,
             LoggedInUsers = loggedInUsers,
             TotalUsers = totalUsers,
-            TotalKnowledgeNodes = KonwledgeNodesCount,
+            TotalKnowledgeNodes = KnowledgeNodesCount,
             TotalStudyGroups = StudyGroupsCount,
             // WeeklyActiveStudyGroups = ActiveStudyGroupsCount,
             // TotalKnowledgeNodeViews = KnowledgeNodeViewsCount

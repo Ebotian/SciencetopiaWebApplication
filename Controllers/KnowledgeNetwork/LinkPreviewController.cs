@@ -128,7 +128,7 @@ public class LinkPreviewController : ControllerBase
         }
         catch (Exception)
         {
-            return null;
+            return string.Empty;
         }
     }
 

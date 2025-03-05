@@ -68,15 +68,15 @@ public class EditProfilePictureRequest
 
 public class JoinRequest
 {
-    public string UserId { get; set; }
-    public string Name { get; set; }
-    public string AppliedOn { get; set; } // Assuming you store the applied date as a string
-    public string AvatarUrl { get; set; } // Assuming you have an avatar URL for the requester
+    public string? UserId { get; set; }
+    public string? Name { get; set; }
+    public string? AppliedOn { get; set; } // Assuming you store the applied date as a string
+    public string? AvatarUrl { get; set; } // Assuming you have an avatar URL for the requester
 }
 
 public class ActivityLog
 {
-    public string Id { get; set; } // Unique ID for the log
-    public string Message { get; set; }
-    public string Date { get; set; } // Assuming you store the date as a string
+    public string? Id { get; set; } // Unique ID for the log
+    public string? Message { get; set; }
+    public string? Date { get; set; } // Assuming you store the date as a string
 }

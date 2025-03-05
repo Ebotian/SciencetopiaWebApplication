@@ -88,7 +88,8 @@ builder.Services.AddSingleton(x =>
     var connectionString = configuration["AzureBlobStorage:ConnectionString"];
     return new BlobServiceClient(connectionString);
 });
-
+builder.Services.AddScoped<IGraphRepository, GraphRepository>();
+builder.Services.AddScoped<ISqlRepository, SqlRepository>();
 builder.Services.AddScoped(x => x.GetService<IDriver>().AsyncSession());
 builder.Services.AddScoped<IUserValidator<ApplicationUser>, CustomUserValidator>();
 

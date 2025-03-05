@@ -24,6 +24,11 @@ public class StudyGroupManageController : ControllerBase
             return BadRequest(ModelState);
         }
 
+        if (string.IsNullOrEmpty(request.MemberId))
+        {
+            return BadRequest("MemberId cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.InviteMemberAsync(studyGroupId, request.MemberId);
         if (result)
         {
@@ -39,6 +44,11 @@ public class StudyGroupManageController : ControllerBase
     [ServiceFilter(typeof(GroupManagerAuthorizeAttribute))]
     public async Task<IActionResult> ApproveJoinRequest(string studyGroupId, [FromBody] ApproveJoinRequest request)
     {
+        if (string.IsNullOrEmpty(request.UserId))
+        {
+            return BadRequest("UserId cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.ApproveJoinRequestAsync(studyGroupId, request.UserId);
         if (result)
         {
@@ -54,6 +64,11 @@ public class StudyGroupManageController : ControllerBase
     [ServiceFilter(typeof(GroupManagerAuthorizeAttribute))]
     public async Task<IActionResult> DeleteMember(string studyGroupId, [FromBody] DeleteMemberRequest request)
     {
+        if (string.IsNullOrEmpty(request.MemberId))
+        {
+            return BadRequest("MemberId cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.DeleteMemberAsync(studyGroupId, request.MemberId);
         if (result)
         {
@@ -69,6 +84,11 @@ public class StudyGroupManageController : ControllerBase
     [ServiceFilter(typeof(GroupManagerAuthorizeAttribute))]
     public async Task<IActionResult> TransferManagerRole(string studyGroupId, [FromBody] TransferManagerRoleRequest request)
     {
+        if (string.IsNullOrEmpty(request.NewManagerId))
+        {
+            return BadRequest("NewManagerId cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.TransferManagerRoleAsync(studyGroupId, request.NewManagerId);
         if (result)
         {
@@ -84,6 +104,11 @@ public class StudyGroupManageController : ControllerBase
     [ServiceFilter(typeof(GroupManagerAuthorizeAttribute))]
     public async Task<IActionResult> RenameGroup(string studyGroupId, [FromBody] RenameGroupRequest request)
     {
+        if (string.IsNullOrEmpty(request.NewName))
+        {
+            return BadRequest("NewName cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.RenameGroupAsync(studyGroupId, request.NewName);
         if (result)
         {
@@ -99,6 +124,11 @@ public class StudyGroupManageController : ControllerBase
     [ServiceFilter(typeof(GroupManagerAuthorizeAttribute))]
     public async Task<IActionResult> EditDescription(string studyGroupId, [FromBody] EditDescriptionRequest request)
     {
+        if (string.IsNullOrEmpty(request.NewDescription))
+        {
+            return BadRequest("NewDescription cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.EditDescriptionAsync(studyGroupId, request.NewDescription);
         if (result)
         {
@@ -114,6 +144,11 @@ public class StudyGroupManageController : ControllerBase
     [ServiceFilter(typeof(GroupManagerAuthorizeAttribute))]
     public async Task<IActionResult> EditProfilePicture(string studyGroupId, [FromBody] EditProfilePictureRequest request)
     {
+        if (string.IsNullOrEmpty(request.NewProfilePictureUrl))
+        {
+            return BadRequest("NewProfilePictureUrl cannot be null or empty.");
+        }
+
         var result = await _studyGroupService.EditProfilePictureAsync(studyGroupId, request.NewProfilePictureUrl);
         if (result)
         {

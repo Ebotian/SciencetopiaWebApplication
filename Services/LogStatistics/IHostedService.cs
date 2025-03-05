@@ -1,7 +1,7 @@
 public class DailySummaryHostedService : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
-    private Timer _timer;
+    private Timer? _timer = null;
 
     public DailySummaryHostedService(IServiceProvider serviceProvider)
     {
@@ -14,7 +14,7 @@ public class DailySummaryHostedService : IHostedService
         return Task.CompletedTask;
     }
 
-    private async void GenerateDailySummary(object state)
+    private async void GenerateDailySummary(object? state)
     {
         using (var scope = _serviceProvider.CreateScope())
         {
