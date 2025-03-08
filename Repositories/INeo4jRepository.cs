@@ -21,6 +21,11 @@ public interface IGraphRepository
     /// 获取共享同一标签的知识节点之间的投影边，累加权重
     /// </summary>
     Task<List<ProjectedRelationDTO>> GetProjectedRelationsAsync();
+
+    /// <summary>
+    /// 获取知识节点与标签层次节点之间的关系
+    /// </summary>
+    Task<Dictionary<string, string>> GetNodeTagLevelRelationsAsync(IEnumerable<string> nodeIds);
 }
 
 public class GraphRepository : IGraphRepository
@@ -36,7 +41,7 @@ public class GraphRepository : IGraphRepository
     {
         using var session = _driver.AsyncSession();
         var cypher = @"
-            MATCH (n:Keyword)-[:HAS_TAG]->(t:Tags)
+            MATCH (t:Tags)-[:TAGGED_WITH]->(n:KnowledgeNode)
             RETURN n.id AS SourceId, t.id AS TagId
         ";
         var result = await session.RunAsync(cypher);
@@ -70,7 +75,7 @@ public class GraphRepository : IGraphRepository
         using var session = _driver.AsyncSession();
         // 基于纯标签节点和 TAGGED_WITH 关系投影出知识节点间共享的关系
         var cypher = @"
-            MATCH (n:Keyword)-[:HAS_TAG]->(t:Tags)<-[:HAS_TAG]-(m:Keyword)
+            MATCH (n:KnowledgeNode)<-[:TAGGED_WITH]-(t:Tags)-[:TAGGED_WITH]->(m:KnowledgeNode)
             WHERE n <> m
             WITH n, m, count(*) AS weight
             RETURN n.id AS SourceId, m.id AS TargetId, weight
@@ -83,5 +88,33 @@ public class GraphRepository : IGraphRepository
                 TargetId = record["TargetId"].As<string>(),
                 Weight = record["weight"].As<int>()
             }).ToList();
+    }
+
+    public async Task<Dictionary<string, string>> GetNodeTagLevelRelationsAsync(IEnumerable<string> nodeIds)
+    {
+        using var session = _driver.AsyncSession();
+
+        var query = @"
+        MATCH (tagLevel:TagLevel)-[:TAGGED_WITH]->(node:KnowledgeNode)
+        WHERE toLower(node.id) IN $nodeIds
+        RETURN node.id AS NodeId, tagLevel.id AS TagLevelId
+        ";
+        var parameters = new Dictionary<string, object>
+        {
+            { "nodeIds", nodeIds.Select(id => id.ToLower()) }
+        };
+
+        var result = await session.RunAsync(query, parameters);
+
+        var nodeTagLevels = new Dictionary<string, string>();
+
+        await result.ForEachAsync(record =>
+        {
+            var nodeId = record["NodeId"].As<string>();
+            var tagLevelId = record["TagLevelId"].As<string>();
+            nodeTagLevels[nodeId] = tagLevelId;
+        });
+        
+        return nodeTagLevels;
     }
 }

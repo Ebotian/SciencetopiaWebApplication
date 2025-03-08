@@ -47,7 +47,6 @@ public class SqlRepository : ISqlRepository
                                  Id = tag.Id,
                                  Name = tag.Name,
                                  Description = tag.Description,
-                                 TagLevel = tag.TagLevel,
                                  CreatedDate = tag.CreatedDate.HasValue ? tag.CreatedDate.Value.UtcDateTime : default,
                                  UpdatedDate = tag.UpdatedDate.HasValue ? tag.UpdatedDate.Value.UtcDateTime : default
                              })

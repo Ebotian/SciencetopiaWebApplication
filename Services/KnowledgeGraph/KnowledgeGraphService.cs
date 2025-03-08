@@ -1,3 +1,4 @@
+using System.Collections;
 using Neo4j.Driver;
 
 public class KnowledgeGraphService
@@ -49,16 +50,20 @@ public class KnowledgeGraphService
         return hierarchyRelations;
     }
 
-    public async Task<GraphDTO> GetKnowledgeGraphDataAsync(string tagSystem)
+    public async Task<IEnumerable<string>> GetAllKnowledgeNodeIdsAsync()
     {
-        // 1. 从 SQL 获取所有知识节点 id（假设已有 GetAllNodeIdsAsync 方法）
-        var allNodeIds = await _sqlRepository.GetAllNodeIdsAsync();
-        // 获取节点详情，不包含 TagLevel，因为知识节点表中没有这个列
+        // 从 SQL 获取所有节点 id
+        return await _sqlRepository.GetAllNodeIdsAsync();
+    }
+
+    public async Task<GraphDTO> GetKnowledgeGraphDataByNodeId(IEnumerable<string> allNodeIds)
+    {
+        // 获取节点详情
         var nodesDict = _sqlRepository.GetNodesDetails(allNodeIds);
         // 转换成 NodeDTO 列表
         var sqlNodes = nodesDict.Select(kvp => new NodeDTO
         {
-            Id = kvp.Key,
+            Id = kvp.Key.ToLower(),
             Name = kvp.Value.Name,
             Description = kvp.Value.Description,
             CreatedDate = kvp.Value.CreatedDate.UtcDateTime,
@@ -66,21 +71,25 @@ public class KnowledgeGraphService
             TagLevel = "" // 这里先置空，后续赋值
         }).ToList();
 
-        // 2. 从 SQL 获取所有 Tag 映射（包含 TagLevel 信息）
-        var sqlTags = await _sqlRepository.GetAllTagsAsync(); // List<Tags>
-                                                              // 构造标签名称到 TagLevel 的映射
-        var tagNameToTagLevel = sqlTags
-            .Where(t => !string.IsNullOrEmpty(t.Name))
-            .ToDictionary(t => t.Name!, t => t.TagLevel);
+        // 从 SQL 获取所有 Tag 信息
+        var sqlTags = await _sqlRepository.GetAllTagsAsync();
 
-        // 3. 根据节点名称来确定 TagLevel：
-        //    如果节点名称与某个 Tag 名称匹配，则节点的 TagLevel 为该 Tag 的 TagLevel；
-        //    否则默认为 "Keyword"
+        // 构造仅包含TagLevel节点的映射
+        var tagLevelNames = new HashSet<string> { "Subject", "Field", "Topic", "Keyword" };
+        var tagLevelIdToName = sqlTags
+            .Where(t => tagLevelNames.Contains(t.Name))
+            .ToDictionary(t => t.Id.ToString()!, t => t.Name!);
+
+        // 从neo4j获取节点与TagLevel节点的关系 (节点Id, TagLevel对应的TagId)
+        var nodeIdToTagLevelId = await _graphRepository.GetNodeTagLevelRelationsAsync(allNodeIds);
+
+        // 更新节点的 TagLevel （默认为Keyword）
         foreach (var node in sqlNodes)
         {
-            if (node.Name != null && tagNameToTagLevel.TryGetValue(node.Name, out var tagLevel))
+            if (nodeIdToTagLevelId.TryGetValue(node.Id, out var tagLevelTagId) &&
+                tagLevelIdToName.TryGetValue(tagLevelTagId, out var tagLevelName))
             {
-                node.TagLevel = tagLevel;
+                node.TagLevel = tagLevelName;
             }
             else
             {
@@ -88,26 +97,25 @@ public class KnowledgeGraphService
             }
         }
 
-        // 4. 从 Neo4j 获取其它关系数据
+        // 从 Neo4j 获取其它关系数据
         var taggedRelations = await _graphRepository.GetTaggedRelationsAsync();
-        // var projectedRelations = await _graphRepository.GetProjectedRelationsAsync();
         var projectedRelations = new List<ProjectedRelationDTO>(); // 假设这里返回的是空列表
         var tagContainRelations = await _graphRepository.GetPureTagContainRelationsAsync();
 
-        // 5. 构造层次关系：利用纯标签 CONTAIN 关系转换为知识节点间的层次关系
-        // 构造映射：标签知识节点的 Title -> 节点 id（假设 SQL 中标签知识节点的 Title 与 Tag.Name 一致）
+        // 构造层次关系：利用纯标签 CONTAIN 关系转换为知识节点间的层次关系
+        var tagIdToName = sqlTags.ToDictionary(t => t.Id.ToString(), t => t.Name);
+
         var tagNameToNodeId = sqlNodes
-            .Where(n => n.Name != null && tagNameToTagLevel.ContainsKey(n.Name))
+            .Where(n => n.Name != null && tagIdToName.Values.Contains(n.Name))
             .GroupBy(n => n.Name)
             .ToDictionary(g => g.Key!, g => g.First().Id);
 
         var hierarchyRelations = new List<HierarchyRelationDTO>();
         foreach (var relation in tagContainRelations)
         {
-            // relation.ParentTagId 和 ChildTagId 是纯标签 uid，
-            // 通过 sqlTags 中将 Guid 转为字符串来比较
             var parentTagName = sqlTags.FirstOrDefault(t => t.Id.ToString() == relation.ParentTagId)?.Name;
             var childTagName = sqlTags.FirstOrDefault(t => t.Id.ToString() == relation.ChildTagId)?.Name;
+            
             if (!string.IsNullOrEmpty(parentTagName) && !string.IsNullOrEmpty(childTagName))
             {
                 if (tagNameToNodeId.TryGetValue(parentTagName, out var parentNodeId) &&
@@ -122,11 +130,7 @@ public class KnowledgeGraphService
             }
         }
 
-        // 6. 处理 HAS_TAG（taggedRelations）关系：
-        // 对于每个 HAS_TAG 关系，原始定义中 tagged.SourceId 为 Keyword 节点，tagged.TagId 为标签 id
-        // 现在，我们希望把标签 id 替换为其对应的标签知识节点 id，即查找在 sqlNodes 中 TagLevel 为 "Topic" 且名称等于该标签名称的节点
-        var tagIdToName = sqlTags.ToDictionary(t => t.Id.ToString(), t => t.Name);
-        // 构造仅包含 Topic 节点的映射（名称 -> 节点 id），即标签知识节点
+        // 处理 TAGGED_WITH（taggedRelations）关系
         var topicNodesByName = sqlNodes
             .Where(n => n.TagLevel == "Topic" && !string.IsNullOrEmpty(n.Name))
             .GroupBy(n => n.Name)
@@ -135,31 +139,27 @@ public class KnowledgeGraphService
         var replacedTaggedRelations = new List<HierarchyRelationDTO>();
         foreach (var tagged in taggedRelations)
         {
-            // tagged.SourceId 是 Keyword 节点 id
-            // tagged.TagId 为原始标签 id，替换为对应标签知识节点 id
             if (tagIdToName.TryGetValue(tagged.TagId, out var tagName))
             {
                 if (topicNodesByName.TryGetValue(tagName, out var topicNodeId))
                 {
                     replacedTaggedRelations.Add(new HierarchyRelationDTO
                     {
-                        ParentId = topicNodeId,  // Topic 知识节点作为父节点
-                        ChildId = tagged.SourceId  // Keyword 节点作为子节点
+                        ParentId = topicNodeId,
+                        ChildId = tagged.SourceId
                     });
                 }
             }
         }
 
-        // 7. 整合所有关系为 links
+        // 整合所有关系为 links
         var linksDto = new List<LinkDTO>();
-        // 添加层次关系（CONTAIN）来自纯标签关系
         linksDto.AddRange(hierarchyRelations.Select(r => new LinkDTO
         {
             Source = r.ParentId,
             Target = r.ChildId,
             Relation = "CONTAIN"
         }));
-        // 添加投影关系
         linksDto.AddRange(projectedRelations.Select(r => new LinkDTO
         {
             Source = r.SourceId,
@@ -167,14 +167,6 @@ public class KnowledgeGraphService
             Relation = "projected",
             Weight = r.Weight
         }));
-        // // 添加原始的 HAS_TAG 关系（保留原始关系，若需要可省略）
-        // linksDto.AddRange(taggedRelations.Select(r => new LinkDTO
-        // {
-        //     Source = r.SourceId,
-        //     Target = r.TagId,
-        //     Relation = "TAGGED_WITH"
-        // }));
-        // 添加替换后的额外 CONTAIN 关系（Topic → Keyword），此时标签 id 已被替换
         linksDto.AddRange(replacedTaggedRelations.Select(r => new LinkDTO
         {
             Source = r.ParentId,
