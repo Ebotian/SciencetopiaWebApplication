@@ -26,6 +26,16 @@ public interface IGraphRepository
     /// 获取知识节点与标签层次节点之间的关系
     /// </summary>
     Task<Dictionary<string, string>> GetNodeTagLevelRelationsAsync(IEnumerable<string> nodeIds);
+
+    /// <summary>
+    /// 获取所有与指定标签相关的知识节点
+    /// </summary>
+    Task<IEnumerable<string>> GetAllNodesRelatedToTagsAsync(IEnumerable<string> tagIds);
+
+    /// <summary>
+    /// 根据标签类型获取标签节点的 Id
+    /// </summary>
+    Task<IEnumerable<string>> GetTagNodeIdsByLabelAsync(string label);
 }
 
 public class GraphRepository : IGraphRepository
@@ -116,5 +126,41 @@ public class GraphRepository : IGraphRepository
         });
         
         return nodeTagLevels;
+    }
+
+    public async Task<IEnumerable<string>> GetAllNodesRelatedToTagsAsync(IEnumerable<string> tagIds)
+    {
+        using var session = _driver.AsyncSession();
+        var query = @"
+        MATCH (t:Tags)-[:TAGGED_WITH]->(n:KnowledgeNode)
+        WHERE t.id IN $tagIds
+        RETURN n.id AS NodeId
+        ";
+        var parameters = new Dictionary<string, object>
+        {
+            { "tagIds", tagIds }
+        };
+
+        var result = await session.RunAsync(query, parameters);
+
+        return await result.ToListAsync(record => record["NodeId"].As<string>());
+    }
+
+    public async Task<IEnumerable<string>> GetTagNodeIdsByLabelAsync(string label)
+    {
+        using var session = _driver.AsyncSession();
+        var query = @"
+        MATCH (t:Tags)
+        WHERE t.label = $label
+        RETURN t.id AS TagId
+        ";
+        var parameters = new Dictionary<string, object>
+        {
+            { "label", label }
+        };
+
+        var result = await session.RunAsync(query, parameters);
+
+        return await result.ToListAsync(record => record["TagId"].As<string>());
     }
 }

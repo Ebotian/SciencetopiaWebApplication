@@ -31,14 +31,16 @@ namespace Sciencetopia.Controllers
         {
             // Determine if the user is authenticated
             string userId = User?.Identity?.IsAuthenticated == true ? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty : string.Empty;
-            // Get all node Ids
-            var allNodeIds = await _knowledgeGraphService.GetAllKnowledgeNodeIdsAsync();
+            // Get all Tag Ids related to Tag System
+            var allTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAsync(tagSystem) : Enumerable.Empty<string>();
+            // Get all node Ids related to Tag Ids 
+            var allNodeIds = await _knowledgeGraphService.GetAllNodesRelatedToTags(allTagIds);
             // Get knowledge graph data from all node Ids
-            var data = await _knowledgeGraphService.GetKnowledgeGraphDataByNodeId(allNodeIds);
+            var data = await _knowledgeGraphService.GetKnowledgeGraphDataByNodeId(allNodeIds, allTagIds);
             if (userId != string.Empty)
             {
-            var data_pending = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
-            return Ok(new { data, data_pending });
+                var data_pending = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
+                return Ok(new { data, data_pending });
             }
             return Ok(new { data });
         }

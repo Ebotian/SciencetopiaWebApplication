@@ -11,8 +11,10 @@ public interface ISqlRepository
     /// 创建、更新和删除节点
     /// </summary>
     Task<IEnumerable<string>> GetAllNodeIdsAsync();
+    Task<IEnumerable<string>> GetTagNodeIdsByTagTypeAsync(string tagType);
     Task<List<Tags>> GetAllTagsAsync();
-    Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)> GetNodesDetails(IEnumerable<string> ids);
+    Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetTagDetailsAsync(IEnumerable<string> ids);
+    Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetNodesDetailsAsync(IEnumerable<string> ids);
     Dictionary<string, (string Name, string Description, DateTime CreatedDate, DateTime UpdatedDate)> GetRepresentativeNodes(IEnumerable<string> tagIds);
     Dictionary<string, object> CreateNode(string id, string name, string description);
     bool UpdateNode(string id, string name, string description);
@@ -37,6 +39,17 @@ public class SqlRepository : ISqlRepository
                              .ToListAsync();
     }
 
+    public async Task<IEnumerable<string>> GetTagNodeIdsByTagTypeAsync(string tagType)
+    {
+        return await (from tag in _context.Tags
+                  join tagTypeEntity in _context.TagTypes on tag.Id equals tagTypeEntity.TagId
+                  join typeOfTag in _context.TypesOfTags on tagTypeEntity.TypeId equals typeOfTag.Id
+                  where typeOfTag.Type == tagType
+                  select tag)
+                 .Select(tag => tag.Id.ToString()!)
+                 .ToListAsync();
+    }
+
     // 获取所有Tag信息，转换Tag.Id为字符串
     public async Task<List<Tags>> GetAllTagsAsync()
     {
@@ -53,10 +66,36 @@ public class SqlRepository : ISqlRepository
                              .ToListAsync();
     }
 
-    // 获取节点详情，投影时将 Guid 转为字符串
-    public Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)> GetNodesDetails(IEnumerable<string> ids)
+    public async Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetTagDetailsAsync(IEnumerable<string> ids)
     {
-        var nodes = _context.KnowledgeNodes
+        var tags = await _context.Tags
+                            .Where(tag => ids.Contains(tag.Id.ToString()))
+                            .Select(tag => new
+                            {
+                                Id = tag.Id.ToString(),
+                                tag.Name,
+                                tag.Description,
+                                // 将 DateTime 转换为 DateTimeOffset（假设这里的 DateTime 为本地时间，可以根据实际情况调整）
+                                CreatedDate = tag.CreatedDate,
+                                UpdatedDate = tag.UpdatedDate
+                            })
+                            .ToListAsync();
+
+        var dict = new Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>();
+        foreach (var tag in tags)
+        {
+            if (!string.IsNullOrEmpty(tag.Id))
+            {
+                dict[tag.Id] = (tag.Name ?? string.Empty, tag.Description ?? string.Empty, tag.CreatedDate.HasValue ? tag.CreatedDate.Value : default, tag.UpdatedDate.HasValue ? tag.UpdatedDate.Value : default);
+            }
+        }
+        return dict;
+    }
+
+    // 获取节点详情，投影时将 Guid 转为字符串
+    public async Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetNodesDetailsAsync(IEnumerable<string> ids)
+    {
+        var nodes = await _context.KnowledgeNodes
                             .Where(node => ids.Contains(node.Id.ToString()))
                             .Select(node => new
                             {
@@ -67,8 +106,7 @@ public class SqlRepository : ISqlRepository
                                 CreatedDate = node.CreatedDate,
                                 UpdatedDate = node.UpdatedDate
                             })
-                            .AsEnumerable()
-                            .ToList();
+                            .ToListAsync();
 
         var dict = new Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>();
         foreach (var node in nodes)

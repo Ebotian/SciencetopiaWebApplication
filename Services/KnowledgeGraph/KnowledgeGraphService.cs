@@ -14,52 +14,28 @@ public class KnowledgeGraphService
         _sqlRepository = sqlRepository;
     }
 
-    public async Task<List<HierarchyRelationDTO>> BuildKnowledgeHierarchyRelationsAsync(List<KnowledgeNode> sqlNodes, List<Tags> sqlTags)
-    {
-        // 从 Neo4j 获取纯标签间的 CONTAIN 关系（uid 之间）
-        var tagContainRelations = await _graphRepository.GetPureTagContainRelationsAsync();
-
-        // 构造 Tag uid -> Tag Name 映射（通过 SQL 中的 Tags 表）
-        // 注意：将 Guid 转换为 string
-        var tagUidToName = sqlTags.ToDictionary(t => t.Id.ToString(), t => t.Name);
-
-        // 构造映射：标签知识节点的 Title（应与标签名称一致） -> 节点 id
-        var tagNameToNodeId = sqlNodes
-            .Where(n => n.Name != null && tagUidToName.Values.Contains(n.Name))
-            .ToDictionary(n => n.Name!, n => n.Id.ToString());
-
-        var hierarchyRelations = new List<HierarchyRelationDTO>();
-        foreach (var relation in tagContainRelations)
-        {
-            if (relation.ParentTagId != null && relation.ChildTagId != null &&
-                tagUidToName.TryGetValue(relation.ParentTagId, out var parentTagName) &&
-                tagUidToName.TryGetValue(relation.ChildTagId, out var childTagName))
-            {
-                if (parentTagName != null && childTagName != null &&
-                    tagNameToNodeId.TryGetValue(parentTagName, out var parentNodeId) &&
-                    tagNameToNodeId.TryGetValue(childTagName, out var childNodeId))
-                {
-                    hierarchyRelations.Add(new HierarchyRelationDTO
-                    {
-                        ParentId = parentNodeId,
-                        ChildId = childNodeId
-                    });
-                }
-            }
-        }
-        return hierarchyRelations;
-    }
-
     public async Task<IEnumerable<string>> GetAllKnowledgeNodeIdsAsync()
     {
         // 从 SQL 获取所有节点 id
         return await _sqlRepository.GetAllNodeIdsAsync();
     }
 
-    public async Task<GraphDTO> GetKnowledgeGraphDataByNodeId(IEnumerable<string> allNodeIds)
+    public async Task<IEnumerable<string>> GetTagIdsByTagTypeAsync(string tagType)
+    {
+        // 从 SQL 获取指定标签类型的节点 id
+        return await _sqlRepository.GetTagNodeIdsByTagTypeAsync(tagType);
+    }
+
+    public async Task<IEnumerable<string>> GetAllNodesRelatedToTags(IEnumerable<string> tagIds)
+    {
+        // 从 SQL 获取代表节点的完整详情
+        return await _graphRepository.GetAllNodesRelatedToTagsAsync(tagIds);
+    }
+
+    public async Task<GraphDTO> GetKnowledgeGraphDataByNodeId(IEnumerable<string> allNodeIds, IEnumerable<string> allTagIds)
     {
         // 获取节点详情
-        var nodesDict = _sqlRepository.GetNodesDetails(allNodeIds);
+        var nodesDict = await _sqlRepository.GetNodesDetailsAsync(allNodeIds);
         // 转换成 NodeDTO 列表
         var sqlNodes = nodesDict.Select(kvp => new NodeDTO
         {
@@ -72,13 +48,13 @@ public class KnowledgeGraphService
         }).ToList();
 
         // 从 SQL 获取所有 Tag 信息
-        var sqlTags = await _sqlRepository.GetAllTagsAsync();
+        var sqlTags = await _sqlRepository.GetTagDetailsAsync(allTagIds);
 
         // 构造仅包含TagLevel节点的映射
-        var tagLevelNames = new HashSet<string> { "Subject", "Field", "Topic", "Keyword" };
+        var tagLevelIds = await _graphRepository.GetTagNodeIdsByLabelAsync("TagLevel");
         var tagLevelIdToName = sqlTags
-            .Where(t => tagLevelNames.Contains(t.Name))
-            .ToDictionary(t => t.Id.ToString()!, t => t.Name!);
+            .Where(t => tagLevelIds.Contains(t.Key))
+            .ToDictionary(t => t.Key, t => t.Value.Name);
 
         // 从neo4j获取节点与TagLevel节点的关系 (节点Id, TagLevel对应的TagId)
         var nodeIdToTagLevelId = await _graphRepository.GetNodeTagLevelRelationsAsync(allNodeIds);
@@ -103,7 +79,7 @@ public class KnowledgeGraphService
         var tagContainRelations = await _graphRepository.GetPureTagContainRelationsAsync();
 
         // 构造层次关系：利用纯标签 CONTAIN 关系转换为知识节点间的层次关系
-        var tagIdToName = sqlTags.ToDictionary(t => t.Id.ToString(), t => t.Name);
+        var tagIdToName = sqlTags.ToDictionary(t => t.Key, t => t.Value.Name);
 
         var tagNameToNodeId = sqlNodes
             .Where(n => n.Name != null && tagIdToName.Values.Contains(n.Name))
@@ -113,8 +89,8 @@ public class KnowledgeGraphService
         var hierarchyRelations = new List<HierarchyRelationDTO>();
         foreach (var relation in tagContainRelations)
         {
-            var parentTagName = sqlTags.FirstOrDefault(t => t.Id.ToString() == relation.ParentTagId)?.Name;
-            var childTagName = sqlTags.FirstOrDefault(t => t.Id.ToString() == relation.ChildTagId)?.Name;
+            var parentTagName = sqlTags.FirstOrDefault(t => t.Key.ToString() == relation.ParentTagId).Value.Name;
+            var childTagName = sqlTags.FirstOrDefault(t => t.Key.ToString() == relation.ChildTagId).Value.Name;
             
             if (!string.IsNullOrEmpty(parentTagName) && !string.IsNullOrEmpty(childTagName))
             {

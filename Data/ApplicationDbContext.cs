@@ -20,9 +20,11 @@ namespace Sciencetopia.Data
         public DbSet<DailySummary> DailySummaries { get; set; }
         // Add the KnowledgeNodes DbSet
         public DbSet<KnowledgeNode> KnowledgeNodes { get; set; }
+        public DbSet<TypesOfTags> TypesOfTags { get; set; }
+        public DbSet<TagTypes> TagTypes { get; set; }
         // Add the Tags DbSet
         public DbSet<Tags> Tags { get; set; }
-        
+
         protected override void OnModelCreating(ModelBuilder builder)
         {
             base.OnModelCreating(builder);
@@ -40,10 +42,6 @@ namespace Sciencetopia.Data
                 .HasForeignKey(m => m.ReceiverId)
                 .OnDelete(DeleteBehavior.Restrict);
 
-            // Optional: Configure the Conversation and Notification models if necessary
-            // builder.Entity<Conversation>().Has...
-            // builder.Entity<Notification>().Has...
-
             // Configure VisitLog relationships (if needed)
             builder.Entity<VisitLog>()
                 .HasKey(v => v.Id); // Primary Key
@@ -53,6 +51,10 @@ namespace Sciencetopia.Data
                 .WithMany()
                 .HasForeignKey(v => v.UserId)
                 .OnDelete(DeleteBehavior.Restrict); // If visits are linked to users
+
+            // Define Composite Primary Key for TagTypes (No Navigation Properties)
+            builder.Entity<TagTypes>()
+                .HasKey(tt => new { tt.TagId, tt.TypeId });  // Define composite key
         }
     }
 }
