@@ -32,7 +32,7 @@ namespace Sciencetopia.Controllers
             // Determine if the user is authenticated
             string userId = User?.Identity?.IsAuthenticated == true ? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty : string.Empty;
             // Get all Tag Ids related to Tag System
-            var allTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAsync(tagSystem) : Enumerable.Empty<string>();
+            var allTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAsync(tagSystem) : await _knowledgeGraphService.GetTagIdsByTagTypeAsync("MainTag");
             // Get all node Ids related to Tag Ids 
             var allNodeIds = await _knowledgeGraphService.GetAllNodesRelatedToTags(allTagIds);
             // Get knowledge graph data from all node Ids
@@ -43,6 +43,28 @@ namespace Sciencetopia.Controllers
                 return Ok(new { data, data_pending });
             }
             return Ok(new { data });
+        }
+
+        [HttpGet("FilterByTags")]
+        public async Task<IActionResult> FilterByTags([FromQuery] List<string> tags, string? tagSystem)
+        {
+            if (tags == null || tags.Count == 0)
+            {
+                return BadRequest("At least one tag is required.");
+            }
+
+            try
+            {
+                var tagIds = await _knowledgeGraphService.GetTagIdsByTagNamesAsync(tags);
+                var nodeIds = await _knowledgeGraphService.GetNodeIdsByTagsAsync(tagIds);
+                var relatedTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAmongNodesAsync(nodeIds, tagSystem): await _knowledgeGraphService.GetTagIdsByTagTypeAmongNodesAsync(nodeIds, "MainTag");
+                var data = await _knowledgeGraphService.GetKnowledgeGraphDataByNodeId(nodeIds, relatedTagIds);
+                return Ok(data);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
         }
 
         [HttpGet("Search")]

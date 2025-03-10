@@ -1,4 +1,5 @@
 using Neo4j.Driver;
+using System.Text.RegularExpressions;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -30,12 +31,22 @@ public interface IGraphRepository
     /// <summary>
     /// 获取所有与指定标签相关的知识节点
     /// </summary>
-    Task<IEnumerable<string>> GetAllNodesRelatedToTagsAsync(IEnumerable<string> tagIds);
+    Task<HashSet<string>> GetAllNodesRelatedToTagsAsync(IEnumerable<string> tagIds);
+
+    /// <summary>
+    /// 获取所有与指定知识节点相关的标签
+    /// </summary>
+    Task<HashSet<string>> GetAllTagsRelatedToNodesAsync(IEnumerable<string> nodeIds);
 
     /// <summary>
     /// 根据标签类型获取标签节点的 Id
     /// </summary>
-    Task<IEnumerable<string>> GetTagNodeIdsByLabelAsync(string label);
+    Task<IEnumerable<string>> GetNodeIdsByLabelAsync(string label);
+
+    /// <summary>
+    /// 获取所有与指定标签相关的知识节点
+    /// </summary>
+    Task<HashSet<string>> GetAllDescendantTagIdsAsync(IEnumerable<string> tagNames);
 }
 
 public class GraphRepository : IGraphRepository
@@ -124,11 +135,11 @@ public class GraphRepository : IGraphRepository
             var tagLevelId = record["TagLevelId"].As<string>();
             nodeTagLevels[nodeId] = tagLevelId;
         });
-        
+
         return nodeTagLevels;
     }
 
-    public async Task<IEnumerable<string>> GetAllNodesRelatedToTagsAsync(IEnumerable<string> tagIds)
+    public async Task<HashSet<string>> GetAllNodesRelatedToTagsAsync(IEnumerable<string> tagIds)
     {
         using var session = _driver.AsyncSession();
         var query = @"
@@ -138,29 +149,71 @@ public class GraphRepository : IGraphRepository
         ";
         var parameters = new Dictionary<string, object>
         {
-            { "tagIds", tagIds }
+            { "tagIds", tagIds.Select(id => id.ToLower()) }
         };
 
         var result = await session.RunAsync(query, parameters);
 
-        return await result.ToListAsync(record => record["NodeId"].As<string>());
+        var records = await result.ToListAsync();
+        return records.Select(record => record["NodeId"].As<string>()).ToHashSet();
     }
 
-    public async Task<IEnumerable<string>> GetTagNodeIdsByLabelAsync(string label)
+    public async Task<HashSet<string>> GetAllTagsRelatedToNodesAsync(IEnumerable<string> nodeIds)
     {
         using var session = _driver.AsyncSession();
         var query = @"
-        MATCH (t:Tags)
-        WHERE t.label = $label
+        MATCH (t:Tags)-[:TAGGED_WITH]->(n:KnowledgeNode)
+        WHERE n.id IN $nodeIds
         RETURN t.id AS TagId
         ";
         var parameters = new Dictionary<string, object>
         {
-            { "label", label }
+            { "nodeIds", nodeIds.Select(id => id.ToLower()) }
         };
 
         var result = await session.RunAsync(query, parameters);
 
+        var records = await result.ToListAsync();
+        return records.Select(record => record["TagId"].As<string>()).ToHashSet();
+    }
+
+    public async Task<IEnumerable<string>> GetNodeIdsByLabelAsync(string label)
+    {
+        // 确保 label 仅包含安全的字符（防止 Cypher 注入攻击）
+        if (!Regex.IsMatch(label, "^[A-Za-z0-9_]+$"))
+        {
+            throw new ArgumentException("Invalid label format.");
+        }
+
+        // 直接拼接 label 到查询字符串
+        string query = $@"
+        MATCH (t:{label})
+        RETURN t.id AS TagId
+    ";
+
+        using var session = _driver.AsyncSession();
+
+        var result = await session.RunAsync(query);
+
         return await result.ToListAsync(record => record["TagId"].As<string>());
     }
+
+    public async Task<HashSet<string>> GetAllDescendantTagIdsAsync(IEnumerable<string> tagIds)
+    {
+        using var session = _driver.AsyncSession();
+
+        if (!tagIds.Any()) return new HashSet<string>();
+
+        var query = @"
+        MATCH (parent:Tags)-[:CONTAIN*]->(child:Tags)
+        WHERE parent.id IN $tagIds
+        RETURN DISTINCT child.id AS tagId";
+
+        var parameters = new { tagIds };
+
+        var result = await session.RunAsync(query, parameters);
+        var records = await result.ToListAsync();
+        return records.Select(record => record["tagId"].As<string>()).ToHashSet();
+    }
+
 }

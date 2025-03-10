@@ -26,6 +26,24 @@ public class KnowledgeGraphService
         return await _sqlRepository.GetTagNodeIdsByTagTypeAsync(tagType);
     }
 
+    public async Task<IEnumerable<string>> GetTagIdsByTagTypeAmongNodesAsync(IEnumerable<string> nodeIds, string tagType)
+    {
+        // 从 SQL 获取指定节点 id 中有的指定类型的标签 id
+        // 1. 从 SQL 查标签
+        var tagIds = await _sqlRepository.GetTagNodeIdsByTagTypeAsync(tagType);
+        if (!tagIds.Any())
+        {
+            // 没有任何符合条件的标签，直接返回空列表
+            return new List<string>();
+        }
+
+        // 2. 去 Neo4j 查找 TAGGED_WITH 这些知识节点的标签
+        var relatedTypeIds = await _graphRepository.GetAllTagsRelatedToNodesAsync(nodeIds);
+
+        // 3. 返回两个结果的并集
+        return tagIds.Intersect(relatedTypeIds);
+    }
+
     public async Task<IEnumerable<string>> GetAllNodesRelatedToTags(IEnumerable<string> tagIds)
     {
         // 从 SQL 获取代表节点的完整详情
@@ -36,6 +54,7 @@ public class KnowledgeGraphService
     {
         // 获取节点详情
         var nodesDict = await _sqlRepository.GetNodesDetailsAsync(allNodeIds);
+
         // 转换成 NodeDTO 列表
         var sqlNodes = nodesDict.Select(kvp => new NodeDTO
         {
@@ -51,8 +70,11 @@ public class KnowledgeGraphService
         var sqlTags = await _sqlRepository.GetTagDetailsAsync(allTagIds);
 
         // 构造仅包含TagLevel节点的映射
-        var tagLevelIds = await _graphRepository.GetTagNodeIdsByLabelAsync("TagLevel");
-        var tagLevelIdToName = sqlTags
+        var tagLevelIds = await _graphRepository.GetNodeIdsByLabelAsync("TagLevel");
+
+        var sqlTagLevels = await _sqlRepository.GetTagDetailsAsync(tagLevelIds);
+
+        var tagLevelIdToName = sqlTagLevels
             .Where(t => tagLevelIds.Contains(t.Key))
             .ToDictionary(t => t.Key, t => t.Value.Name);
 
@@ -89,9 +111,9 @@ public class KnowledgeGraphService
         var hierarchyRelations = new List<HierarchyRelationDTO>();
         foreach (var relation in tagContainRelations)
         {
-            var parentTagName = sqlTags.FirstOrDefault(t => t.Key.ToString() == relation.ParentTagId).Value.Name;
-            var childTagName = sqlTags.FirstOrDefault(t => t.Key.ToString() == relation.ChildTagId).Value.Name;
-            
+            var parentTagName = sqlTags.FirstOrDefault(t => t.Key.ToString().Equals(relation.ParentTagId, StringComparison.OrdinalIgnoreCase)).Value.Name;
+            var childTagName = sqlTags.FirstOrDefault(t => t.Key.ToString().Equals(relation.ChildTagId, StringComparison.OrdinalIgnoreCase)).Value.Name;
+
             if (!string.IsNullOrEmpty(parentTagName) && !string.IsNullOrEmpty(childTagName))
             {
                 if (tagNameToNodeId.TryGetValue(parentTagName, out var parentNodeId) &&
@@ -155,6 +177,50 @@ public class KnowledgeGraphService
             Nodes = sqlNodes,
             Links = linksDto
         };
+    }
+
+    public async Task<IEnumerable<string>> GetTagIdsByTagNamesAsync(IEnumerable<string> inputTagNames)
+    {
+        var tags = await _sqlRepository.GetTagsByNameAsync(inputTagNames);
+        var tagNameToId = tags.Where(t => t.Name != null).ToDictionary(t => t.Name!, t => t.Id.ToString());
+
+        return inputTagNames.Select(name => tagNameToId.GetValueOrDefault(name, string.Empty));
+    }
+
+    public async Task<IEnumerable<string>> GetNodeIdsByTagsAsync(IEnumerable<string> inputTagIds)
+    {
+
+        HashSet<string>? intersectionDescendantTagIds = null;
+
+        // **逐个查询每个标签的所有子标签 ID，并计算交集**
+        foreach (var tagId in inputTagIds)
+        {
+            var descendantTagIds = await _graphRepository.GetAllDescendantTagIdsAsync(new List<string> { tagId });
+
+            if (intersectionDescendantTagIds == null)
+            {
+                // 初始化交集集合
+                intersectionDescendantTagIds = new HashSet<string>(descendantTagIds);
+            }
+            else
+            {
+                // 取交集
+                intersectionDescendantTagIds.IntersectWith(descendantTagIds);
+            }
+
+            // 若交集为空，提前返回（没有共同的子标签）
+            if (intersectionDescendantTagIds.Count == 0)
+                return Enumerable.Empty<string>();
+        }
+
+        // **确保交集非空再查询 `TAGGED_WITH` 关系**
+        if (intersectionDescendantTagIds != null && intersectionDescendantTagIds.Count > 0)
+        {
+            var nodeIds = await _graphRepository.GetAllNodesRelatedToTagsAsync(intersectionDescendantTagIds);
+            return nodeIds;
+        }
+
+        return Enumerable.Empty<string>();
     }
 
     // public async Task<List<object>> FetchKnowledgeGraphData()

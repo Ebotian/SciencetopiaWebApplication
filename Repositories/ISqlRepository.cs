@@ -13,6 +13,7 @@ public interface ISqlRepository
     Task<IEnumerable<string>> GetAllNodeIdsAsync();
     Task<IEnumerable<string>> GetTagNodeIdsByTagTypeAsync(string tagType);
     Task<List<Tags>> GetAllTagsAsync();
+    Task<List<TagDTO>> GetTagsByNameAsync(IEnumerable<string> inputTagNames);
     Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetTagDetailsAsync(IEnumerable<string> ids);
     Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetNodesDetailsAsync(IEnumerable<string> ids);
     Dictionary<string, (string Name, string Description, DateTime CreatedDate, DateTime UpdatedDate)> GetRepresentativeNodes(IEnumerable<string> tagIds);
@@ -42,11 +43,11 @@ public class SqlRepository : ISqlRepository
     public async Task<IEnumerable<string>> GetTagNodeIdsByTagTypeAsync(string tagType)
     {
         return await (from tag in _context.Tags
-                  join tagTypeEntity in _context.TagTypes on tag.Id equals tagTypeEntity.TagId
-                  join typeOfTag in _context.TypesOfTags on tagTypeEntity.TypeId equals typeOfTag.Id
-                  where typeOfTag.Type == tagType
-                  select tag)
-                 .Select(tag => tag.Id.ToString()!)
+                      join tagTypeEntity in _context.TagTypes on tag.Id equals tagTypeEntity.TagId
+                      join typeOfTag in _context.TypesOfTags on tagTypeEntity.TypeId equals typeOfTag.Id
+                      where typeOfTag.Type == tagType
+                      select tag)
+                 .Select(tag => tag.Id.ToString()!.ToLower())
                  .ToListAsync();
     }
 
@@ -66,13 +67,33 @@ public class SqlRepository : ISqlRepository
                              .ToListAsync();
     }
 
+    public async Task<List<TagDTO>> GetTagsByNameAsync(IEnumerable<string> inputTagNames)
+    {
+        if (inputTagNames == null || !inputTagNames.Any())
+        {
+            return new List<TagDTO>(); // 输入为空，返回空列表
+        }
+
+        // 使用 EF Core 查询匹配的标签
+        var tags = await _context.Tags
+            .Where(t => inputTagNames.Contains(t.Name))
+            .Select(t => new TagDTO
+            {
+                Id = t.Id.ToString()!.ToLower(),
+                Name = t.Name
+            })
+            .ToListAsync();
+
+        return tags;
+    }
+
     public async Task<Dictionary<string, (string Name, string Description, DateTimeOffset CreatedDate, DateTimeOffset UpdatedDate)>> GetTagDetailsAsync(IEnumerable<string> ids)
     {
         var tags = await _context.Tags
-                            .Where(tag => ids.Contains(tag.Id.ToString()))
+                            .Where(tag => ids.Contains(tag.Id.ToString()!.ToLower()))
                             .Select(tag => new
                             {
-                                Id = tag.Id.ToString(),
+                                Id = tag.Id.ToString()!.ToLower(),
                                 tag.Name,
                                 tag.Description,
                                 // 将 DateTime 转换为 DateTimeOffset（假设这里的 DateTime 为本地时间，可以根据实际情况调整）
