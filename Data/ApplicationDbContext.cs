@@ -24,10 +24,16 @@ namespace Sciencetopia.Data
         public DbSet<TagTypes> TagTypes { get; set; }
         // Add the Tags DbSet
         public DbSet<Tags> Tags { get; set; }
+        public DbSet<Favorite> Favorites { get; set; } // New Favorite DbSet
 
         protected override void OnModelCreating(ModelBuilder builder)
         {
             base.OnModelCreating(builder);
+
+            builder.Ignore<KnowledgeNode>();
+            builder.Ignore<TagTypes>();
+            builder.Ignore<Tags>();
+            builder.Ignore<TypesOfTags>();
 
             // Configure relationships for the Message model
             builder.Entity<Message>()
@@ -52,9 +58,36 @@ namespace Sciencetopia.Data
                 .HasForeignKey(v => v.UserId)
                 .OnDelete(DeleteBehavior.Restrict); // If visits are linked to users
 
-            // Define Composite Primary Key for TagTypes (No Navigation Properties)
-            builder.Entity<TagTypes>()
-                .HasKey(tt => new { tt.TagId, tt.TypeId });  // Define composite key
+            // // Define Composite Primary Key for TagTypes (No Navigation Properties)
+            // builder.Entity<TagTypes>()
+            //     .HasKey(tt => new { tt.TagId, tt.TypeId });  // Define composite key
+
+            // Configure Favorites table
+            builder.Entity<Favorite>(entity =>
+            {
+                entity.HasKey(f => f.Id);
+
+                entity.Property(f => f.UserId)
+                    .IsRequired()
+                    .HasColumnType("nvarchar(450)")
+                    .UseCollation("SQL_Latin1_General_CP1_CI_AS"); // Ensure UserId is required and has the same type as IdentityUser's Id
+
+                entity.Property(f => f.Name)
+                    .IsRequired()
+                    .HasMaxLength(100);
+
+                entity.Property(f => f.Type)
+                    .IsRequired()
+                    .HasMaxLength(50);
+
+                entity.Property(f => f.CreatedAt)
+                    .IsRequired();
+
+                entity.HasOne(f => f.User)
+                    .WithMany() // 可替换为 .WithMany(u => u.Favorites) 若你在 ApplicationUser 添加了导航属性
+                    .HasForeignKey(f => f.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
         }
     }
 }

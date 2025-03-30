@@ -1,3 +1,8 @@
+// This version assumes: 
+// (1) each user has one or more Favorite nodes (with `type`, e.g. "favorite")
+// (2) Favorite node connects to KnowledgeNode via [:INCLUDES] relationship
+// (3) name is stored only in SQL
+
 using Microsoft.AspNetCore.Mvc;
 using Neo4j.Driver;
 using Microsoft.AspNetCore.Authorization;
@@ -6,7 +11,7 @@ using System.Security.Claims;
 
 [Route("api/KnowledgeGraph/[controller]")]
 [ApiController]
-[Authorize] // Ensure only authenticated users can access
+[Authorize]
 public class FavoritesController : ControllerBase
 {
     private readonly IAsyncSession _session;
@@ -16,61 +21,28 @@ public class FavoritesController : ControllerBase
         _session = session;
     }
 
-    // [HttpPost("{nodeId}")]
-    // public async Task<IActionResult> AddToFavorites(string nodeId)
-    // {
-    //     try
-    //     {
-    //         int parsedNodeId = Int32.Parse(nodeId);
-    //         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value; // 获取当前登录用户的唯一标识符
-
-    //         var query = @"
-    //         MATCH (u:User {id: $userId}), (n)
-    //         WHERE id(n) = $nodeId
-    //         MERGE (u)-[:FAVORITED]->(n)
-    //         RETURN n
-    //     ";
-
-    //         var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
-    //         var node = await result.SingleAsync();
-
-    //         return Ok(new { success = true, node });
-    //     }
-    //     catch (ClientException ex)
-    //     {
-    //         if (ex.Message.Contains("not found"))
-    //         {
-    //             return NotFound(new { success = false, message = "Node or User not found." });
-    //         }
-    //         return BadRequest(new { success = false, message = ex.Message });
-    //     }
-    //     catch (Exception ex)
-    //     {
-    //         return BadRequest(new { success = false, message = ex.Message });
-    //     }
-    // }
-
     [HttpPost("{nodeId}")]
     public async Task<IActionResult> ToggleFavorites(string nodeId)
     {
         try
         {
             int parsedNodeId = Int32.Parse(nodeId);
-            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value; // Get the current logged-in user's unique identifier
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
+            // 查询该用户的默认收藏夹（type: "favorite"）
             var query = @"
-            MATCH (u:User {id: $userId}), (n)
-            WHERE id(n) = $nodeId
-            OPTIONAL MATCH (u)-[f:FAVORITED]->(n)
-            WITH u, n, f
-            CALL apoc.do.when(
-                f IS NULL,
-                'MERGE (u)-[:FAVORITED]->(n) RETURN true AS favorited',
-                'DELETE f RETURN false AS favorited',
-                {u: u, n: n, f: f}
-            ) YIELD value
-            RETURN n, value.favorited AS favorited
-        ";
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'favorite'}), (n)
+                WHERE id(n) = $nodeId
+                OPTIONAL MATCH (f)-[r:INCLUDES]->(n)
+                WITH f, n, r
+                CALL apoc.do.when(
+                    r IS NULL,
+                    'MERGE (f)-[:INCLUDES {addedAt: datetime()}]->(n) RETURN true AS favorited',
+                    'DELETE r RETURN false AS favorited',
+                    {f: f, n: n, r: r}
+                ) YIELD value
+                RETURN n, value.favorited AS favorited
+            ";
 
             var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
             var record = await result.SingleAsync();
@@ -80,13 +52,41 @@ public class FavoritesController : ControllerBase
 
             return Ok(new { success = true, node, favorited = isFavorited });
         }
-        catch (ClientException ex)
+        catch (Exception ex)
         {
-            if (ex.Message.Contains("not found"))
-            {
-                return NotFound(new { success = false, message = "Node or User not found." });
-            }
             return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
+
+    [HttpPost("ToggleLearned/{nodeId}")]
+    public async Task<IActionResult> ToggleLearningStatus(string nodeId)
+    {
+        try
+        {
+            int parsedNodeId = Int32.Parse(nodeId);
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            var query = @"
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'learned'}), (n)
+                WHERE id(n) = $nodeId
+                OPTIONAL MATCH (f)-[r:INCLUDES]->(n)
+                WITH f, n, r
+                CALL apoc.do.when(
+                    r IS NULL,
+                    'MERGE (f)-[:INCLUDES {addedAt: datetime()}]->(n) RETURN true AS learned',
+                    'DELETE r RETURN false AS learned',
+                    {f: f, n: n, r: r}
+                ) YIELD value
+                RETURN n, value.learned AS learned
+            ";
+
+            var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
+            var record = await result.SingleAsync();
+
+            bool isLearned = record["learned"].As<bool>();
+            var node = record["n"];
+
+            return Ok(new { success = true, node, learned = isLearned });
         }
         catch (Exception ex)
         {
@@ -100,25 +100,20 @@ public class FavoritesController : ControllerBase
         try
         {
             int parsedNodeId = Int32.Parse(nodeId);
-            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value; // Get the current logged-in user's unique identifier
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
             var query = @"
-            MATCH (u:User {id: $userId}), (n)
-            WHERE id(n) = $nodeId
-            OPTIONAL MATCH (u)-[f:FAVORITED]->(n)
-            RETURN CASE WHEN f IS NULL THEN false ELSE true END AS favorited
-        ";
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'favorite'}), (n)
+                WHERE id(n) = $nodeId
+                OPTIONAL MATCH (f)-[r:INCLUDES]->(n)
+                RETURN CASE WHEN r IS NULL THEN false ELSE true END AS favorited
+            ";
 
             var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
             var record = await result.SingleAsync();
 
             bool isFavorited = record["favorited"].As<bool>();
-
             return Ok(new { success = true, favorited = isFavorited });
-        }
-        catch (ClientException ex)
-        {
-            return BadRequest(new { success = false, message = ex.Message });
         }
         catch (Exception ex)
         {
@@ -126,62 +121,32 @@ public class FavoritesController : ControllerBase
         }
     }
 
-    // [HttpGet("MyFavorites")]
-    // public async Task<IActionResult> GetMyFavorites()
-    // {
-    //     try
-    //     {
-    //         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value; // 获取当前登录用户的唯一标识符
+    [HttpGet("LearningStatus/{nodeId}")]
+    public async Task<IActionResult> GetLearningStatus(string nodeId)
+    {
+        try
+        {
+            int parsedNodeId = Int32.Parse(nodeId);
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
-    //         var query = @"
-    //     MATCH (u:User {id: $userId})-[:FAVORITED]->(favNode)
-    //     OPTIONAL MATCH (favNode)-[rel]-(relatedNode)
-    //     WHERE (relatedNode)-[:FAVORITED]-(u)
-    //     RETURN favNode, rel, relatedNode
-    // ";
+            var query = @"
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'learned'}), (n)
+                WHERE id(n) = $nodeId
+                OPTIONAL MATCH (f)-[r:INCLUDES]->(n)
+                RETURN CASE WHEN r IS NULL THEN false ELSE true END AS learned
+            ";
 
-    //         var result = await _session.RunAsync(query, new { userId });
-    //         var data = await result.ToListAsync();
+            var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
+            var record = await result.SingleAsync();
 
-    //         var response = new List<object>();
-    //         foreach (var record in data)
-    //         {
-    //             var favNode = record["favNode"].As<INode>();
-    //             var rel = record["rel"].As<IRelationship>();
-    //             var relatedNode = record["relatedNode"].As<INode>();
-
-    //             response.Add(new
-    //             {
-    //                 source = new
-    //                 {
-    //                     identity = favNode.Id,
-    //                     labels = favNode.Labels,
-    //                     properties = favNode.Properties
-    //                 },
-    //                 relationship = rel == null ? null : new
-    //                 {
-    //                     identity = rel.Id,
-    //                     start = rel.StartNodeId,
-    //                     end = rel.EndNodeId,
-    //                     type = rel.Type,
-    //                     properties = rel.Properties
-    //                 },
-    //                 target = relatedNode == null ? null : new
-    //                 {
-    //                     identity = relatedNode.Id,
-    //                     labels = relatedNode.Labels,
-    //                     properties = relatedNode.Properties
-    //                 }
-    //             });
-    //         }
-
-    //         return Ok(response);
-    //     }
-    //     catch (ClientException ex)
-    //     {
-    //         return BadRequest(new { success = false, message = ex.Message });
-    //     }
-    // }
+            bool isLearned = record["learned"].As<bool>();
+            return Ok(new { success = true, learned = isLearned });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
 
     [HttpGet("MyFavorites")]
     public async Task<IActionResult> GetMyFavoriteNodes()
@@ -191,23 +156,53 @@ public class FavoritesController : ControllerBase
             var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
             var query = @"
-            MATCH (u:User {id: $userId})-[:FAVORITED]->(favNode)
-            RETURN favNode
-        ";
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'favorite'})-[:INCLUDES]->(n)
+                RETURN n
+            ";
 
             var result = await _session.RunAsync(query, new { userId });
             var data = await result.ToListAsync();
 
             var response = data.Select(record => new
             {
-                identity = record["favNode"].As<INode>().Id,
-                labels = record["favNode"].As<INode>().Labels,
-                properties = record["favNode"].As<INode>().Properties
+                identity = record["n"].As<INode>().Id,
+                labels = record["n"].As<INode>().Labels,
+                properties = record["n"].As<INode>().Properties
             }).ToList();
 
             return Ok(response);
         }
-        catch (ClientException ex)
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
+
+    [HttpGet("MyLearned")]
+    public async Task<IActionResult> GetMyLearnedNodes()
+    {
+        try
+        {
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            var query = @"
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'learned'})-[:INCLUDES]->(n)
+                RETURN n
+            ";
+
+            var result = await _session.RunAsync(query, new { userId });
+            var data = await result.ToListAsync();
+
+            var response = data.Select(record => new
+            {
+                identity = record["n"].As<INode>().Id,
+                labels = record["n"].As<INode>().Labels,
+                properties = record["n"].As<INode>().Properties
+            }).ToList();
+
+            return Ok(response);
+        }
+        catch (Exception ex)
         {
             return BadRequest(new { success = false, message = ex.Message });
         }
@@ -222,14 +217,14 @@ public class FavoritesController : ControllerBase
             var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
             var query = @"
-        MATCH (u:User {id: $userId})-[r:FAVORITED]->(n)
-        WHERE id(n) = $nodeId
-        DELETE r
-        RETURN n
-        ";
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'favorite'})-[r:INCLUDES]->(n)
+                WHERE id(n) = $nodeId
+                DELETE r
+                RETURN n
+            ";
 
             var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
-            if (await result.FetchAsync()) // 检查是否找到并删除了关系
+            if (await result.FetchAsync())
             {
                 return Ok(new { success = true, message = "Node removed from favorites." });
             }
@@ -248,4 +243,38 @@ public class FavoritesController : ControllerBase
         }
     }
 
+    [HttpDelete("Learned/{nodeId}")]
+    public async Task<IActionResult> RemoveFromLearned(string nodeId)
+    {
+        try
+        {
+            int parsedNodeId = Int32.Parse(nodeId);
+            var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            var query = @"
+                MATCH (u:User {id: $userId})-[:OWNS]->(f:Favorite {type: 'learned'})-[r:INCLUDES]->(n)
+                WHERE id(n) = $nodeId
+                DELETE r
+                RETURN n
+            ";
+
+            var result = await _session.RunAsync(query, new { userId, nodeId = parsedNodeId });
+            if (await result.FetchAsync())
+            {
+                return Ok(new { success = true, message = "Node removed from learned list." });
+            }
+            else
+            {
+                return NotFound(new { success = false, message = "Learned relation not found." });
+            }
+        }
+        catch (FormatException)
+        {
+            return BadRequest(new { success = false, message = "Invalid node ID format." });
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
 }

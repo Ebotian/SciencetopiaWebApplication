@@ -1,0 +1,13 @@
+namespace Sciencetopia.Models
+{
+    public class Favorite
+    {
+        public Guid Id { get; set; } = Guid.NewGuid();
+        public required string UserId { get; set; }
+        public string? Name { get; set; }
+        public required string Type { get; set; }
+        public DateTime CreatedAt { get; set; }
+
+        public ApplicationUser? User { get; set; }
+    }
+}

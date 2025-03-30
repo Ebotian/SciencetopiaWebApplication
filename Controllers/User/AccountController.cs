@@ -10,6 +10,7 @@ using Sciencetopia.Extensions;
 using Azure.Storage.Blobs;
 using Azure.Storage.Sas;
 using Newtonsoft.Json;
+using Sciencetopia.Data;
 
 namespace Sciencetopia.Controllers
 {
@@ -25,12 +26,13 @@ namespace Sciencetopia.Controllers
         private readonly string _weChatAppSecret;
         private readonly BlobServiceClient _blobServiceClient;
         private readonly IDriver _driver;
+        private readonly ApplicationDbContext _dbContext;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly UserService _userService;
         private readonly EmailTemplateService _emailTemplateService;
         private readonly IWebHostEnvironment _env;
 
-        public AccountController(IConfiguration configuration, IHttpClientFactory httpClientFactory, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager, IEmailSender emailSender, ISmsSender smsSender, BlobServiceClient blobServiceClient, IDriver driver, UserService userService, EmailTemplateService emailTemplateService, IWebHostEnvironment env)
+        public AccountController(IConfiguration configuration, IHttpClientFactory httpClientFactory, UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager, IEmailSender emailSender, ISmsSender smsSender, BlobServiceClient blobServiceClient, IDriver driver, ApplicationDbContext dbContext, UserService userService, EmailTemplateService emailTemplateService, IWebHostEnvironment env)
         {
             _userManager = userManager;
             _signInManager = signInManager;
@@ -38,6 +40,7 @@ namespace Sciencetopia.Controllers
             _smsSender = smsSender;
             _blobServiceClient = blobServiceClient;
             _driver = driver;
+            _dbContext = dbContext;
             _userService = userService;
 
             _httpClientFactory = httpClientFactory;
@@ -107,7 +110,7 @@ namespace Sciencetopia.Controllers
                 await _emailSender.SendEmailAsync(model.Email, "确认您的邮箱", emailContent);
 
                 // 添加用户节点到 Neo4j
-                await AddUserNodeToNeo4j(user);
+                await AddUserNodeToNeo4jAndCreateDefaultFavorite(user);
 
                 // 登陆用户
                 await _signInManager.SignInAsync(user, isPersistent: false);
@@ -618,26 +621,69 @@ namespace Sciencetopia.Controllers
             return Ok(new { AvatarUrl = avatarUrl });
         }
 
-        private async Task<bool> AddUserNodeToNeo4j(ApplicationUser user)
+        private async Task<bool> AddUserNodeToNeo4jAndCreateDefaultFavorite(ApplicationUser user)
         {
-            using (var session = _driver.AsyncSession())
+            // 1. 在 SQL 中插入默认收藏夹
+            var favorite = new Favorite
             {
-                var result = await session.ExecuteWriteAsync(async tx =>
-                {
-                    var exists = await tx.RunAsync("MATCH (u:User {UserName: $UserName}) RETURN u", new { UserName = user.UserName });
-                    if (await exists.PeekAsync() != null)
+                UserId = user.Id,
+                Name = "默认收藏夹",
+                Type = "favorite",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            var learnedBox = new Favorite
+            {
+                UserId = user.Id,
+                Name = "已学过的知识点",
+                Type = "learned",
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _dbContext.Favorites.AddRange(favorite, learnedBox);
+            await _dbContext.SaveChangesAsync();
+
+            // 2. 在 Neo4j 中添加 User 和 Favorite 节点及其关系
+            using var session = _driver.AsyncSession();
+
+            var result = await session.ExecuteWriteAsync(async tx =>
+            {
+                // 创建 User 节点（如果不存在）
+                await tx.RunAsync(@"
+            MERGE (u:User {id: $userId})
+            ", new { userId = user.Id });
+
+                // 创建 Favorite 节点并建立关系
+                await tx.RunAsync(@"
+                    CREATE (f:Favorite {id: $favoriteId, type: $type})
+                    WITH f
+                    MATCH (u:User {id: $userId})
+                    CREATE (u)-[:OWNS]->(f)
+                    ",
+                    new
                     {
-                        return false;
-                    }
+                        userId = user.Id,
+                        favoriteId = favorite.Id,
+                        type = favorite.Type
+                    });
 
-                    await tx.RunAsync("CREATE (u:User {id: $Id})",
-                        new { Id = user.Id });
-
-                    return true;
+                // 已学过夹
+                await tx.RunAsync(@"
+                    CREATE (f:Favorite {id: $favoriteId, type: $type})
+                    WITH f
+                    MATCH (u:User {id: $userId})
+                    CREATE (u)-[:OWNS]->(f)
+                ", new
+                {
+                    userId = user.Id,
+                    favoriteId = learnedBox.Id,
+                    type = learnedBox.Type
                 });
 
-                return result;
-            }
+                return true;
+            });
+
+            return result;
         }
     }
 }
