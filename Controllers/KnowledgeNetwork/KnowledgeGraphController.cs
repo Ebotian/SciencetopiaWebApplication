@@ -26,24 +26,48 @@ namespace Sciencetopia.Controllers
             _knowledgeGraphService = knowledgeGraphService;
         }
 
+        /// <summary>
+        /// 获取知识网络数据，用于前端可视化展示（支持多种视图类型）
+        /// </summary>
+        /// <param name="tagSystem">标签体系名称，默认为 "MainTag"</param>
+        /// <param name="viewType">
+        /// 可视化视图类型，支持以下取值：
+        /// - "network"：默认值，返回节点-边形式的知识网络图数据（网状图）
+        /// - "venn"：返回集合-子集结构的数据，适用于韦恩图展示（标签作为集合，节点作为元素）
+        /// 未来可扩展更多视图类型，如："hierarchy"、"heatmap" 等
+        /// </param>
+        /// <returns>JSON 格式的图数据，用于前端渲染</returns>
         [HttpGet("GetNodes")]
-        public async Task<IActionResult> GetKnowledgeGraph([FromQuery] string? tagSystem)
+        public async Task<IActionResult> GetKnowledgeGraph(
+            [FromQuery] string tagSystem = "MainTag",
+            [FromQuery] string viewType = "network")
         {
-            // Determine if the user is authenticated
-            string userId = User?.Identity?.IsAuthenticated == true ? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty : string.Empty;
-            // Get all Tag Ids related to Tag System
-            var allTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAsync(tagSystem) : await _knowledgeGraphService.GetTagIdsByTagTypeAsync("MainTag");
-            // Get all node Ids related to Tag Ids 
-            var allNodeIds = await _knowledgeGraphService.GetAllNodesRelatedToTags(allTagIds);
-            // Get knowledge graph data from all node Ids
-            var data = await _knowledgeGraphService.GetKnowledgeGraphDataByNodeId(allNodeIds, allTagIds);
-            if (userId != string.Empty)
-            {
-                var data_pending = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
-                return Ok(new { data, data_pending });
-            }
-            return Ok(new { data });
+            string userId = User?.Identity?.IsAuthenticated == true
+                ? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty
+                : string.Empty;
+
+            var result = await _knowledgeGraphService.GetKnowledgeGraphAsync(tagSystem, viewType, userId);
+            return Ok(result);
         }
+
+        // [HttpGet("GetNodes")]
+        // public async Task<IActionResult> GetKnowledgeGraph([FromQuery] string? tagSystem)
+        // {
+        //     // Determine if the user is authenticated
+        //     string userId = User?.Identity?.IsAuthenticated == true ? User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty : string.Empty;
+        //     // Get all Tag Ids related to Tag System
+        //     var allTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAsync(tagSystem) : await _knowledgeGraphService.GetTagIdsByTagTypeAsync("MainTag");
+        //     // Get all node Ids related to Tag Ids 
+        //     var allNodeIds = await _knowledgeGraphService.GetAllNodesRelatedToTags(allTagIds);
+        //     // Get knowledge graph data from all node Ids
+        //     var data = await _knowledgeGraphService.GetKnowledgeGraphDataByNodeId(allNodeIds, allTagIds);
+        //     if (userId != string.Empty)
+        //     {
+        //         var data_pending = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
+        //         return Ok(new { data, data_pending });
+        //     }
+        //     return Ok(new { data });
+        // }
 
         [HttpGet("FilterByTags")]
         public async Task<IActionResult> FilterByTags([FromQuery] List<string> tags, string? tagSystem)
@@ -57,7 +81,7 @@ namespace Sciencetopia.Controllers
             {
                 var tagIds = await _knowledgeGraphService.GetTagIdsByTagNamesAsync(tags);
                 var nodeIds = await _knowledgeGraphService.GetNodeIdsByTagsAsync(tagIds);
-                var relatedTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAmongNodesAsync(nodeIds, tagSystem): await _knowledgeGraphService.GetTagIdsByTagTypeAmongNodesAsync(nodeIds, "MainTag");
+                var relatedTagIds = tagSystem != null ? await _knowledgeGraphService.GetTagIdsByTagTypeAmongNodesAsync(nodeIds, tagSystem) : await _knowledgeGraphService.GetTagIdsByTagTypeAmongNodesAsync(nodeIds, "MainTag");
                 var data = await _knowledgeGraphService.GetKnowledgeGraphDataByNodeId(nodeIds, relatedTagIds);
                 return Ok(data);
             }
@@ -337,6 +361,39 @@ namespace Sciencetopia.Controllers
             try
             {
                 var data = await _knowledgeGraphService.GetPendingNodesByUserIdAsync(userId);
+                return Ok(data);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpGet("GetPendingTags")]
+        public async Task<IActionResult> GetPendingTags()
+        {
+            try
+            {
+                var data = await _knowledgeGraphService.GetPendingTagsAsync();
+                return Ok(data);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+        }
+
+        [HttpPost("GetPendingTagsByUserId")]
+        public async Task<IActionResult> GetPendingTagsByUserId(string userId)
+        {
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                return BadRequest("User ID is required.");
+            }
+
+            try
+            {
+                var data = await _knowledgeGraphService.GetPendingTagsByUserIdAsync(userId);
                 return Ok(data);
             }
             catch (Exception ex)

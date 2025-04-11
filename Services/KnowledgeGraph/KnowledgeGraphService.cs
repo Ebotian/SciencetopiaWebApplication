@@ -5,32 +5,136 @@ public class KnowledgeGraphService
 {
     private readonly IDriver _driver;
     private readonly IGraphRepository _graphRepository;
-    private readonly ISqlRepository _sqlRepository;
+    private readonly IKnowledgeNodeRepository _knowledgeRepo;
+    private readonly ITagRepository _tagRepo;
+    private readonly INodeApprovalRepository _nodeApprovalRepo;
+    private readonly IResourceRepository _resourceRepo;
 
-    public KnowledgeGraphService(IDriver driver, IGraphRepository graphRepository, ISqlRepository sqlRepository)
+    public KnowledgeGraphService(
+        IDriver driver,
+        IGraphRepository graphRepository,
+        IKnowledgeNodeRepository knowledgeRepo,
+        ITagRepository tagRepo,
+        INodeApprovalRepository nodeApprovalRepo,
+        IResourceRepository resourceRepo)
     {
         _driver = driver;
         _graphRepository = graphRepository;
-        _sqlRepository = sqlRepository;
+        _knowledgeRepo = knowledgeRepo;
+        _tagRepo = tagRepo;
+        _nodeApprovalRepo = nodeApprovalRepo;
+        _resourceRepo = resourceRepo;
+    }
+
+
+    public async Task<object> GetKnowledgeGraphAsync(string tagSystem, string viewType, string userId)
+    {
+        var allTagIds = await GetTagIdsByTagTypeAsync(tagSystem);
+
+        return viewType.ToLower() switch
+        {
+            "venn" => await GetVennGraphDataAsync(allTagIds),
+            _ => await GetNetworkGraphDataAsync(allTagIds, userId)
+        };
+    }
+
+    private async Task<object> GetNetworkGraphDataAsync(IEnumerable<string> tagIds, string userId)
+    {
+        var allNodeIds = await GetAllNodesRelatedToTags(tagIds);
+        var data = await GetKnowledgeGraphDataByNodeId(allNodeIds, tagIds);
+
+        if (!string.IsNullOrEmpty(userId))
+        {
+            var data_pending = await GetPendingNodesByUserIdAsync(userId);
+            return new { data, data_pending };
+        }
+
+        return new { data };
+    }
+
+    private async Task<object> GetVennGraphDataAsync(IEnumerable<string> tagIds)
+    {
+        // 获取所有标签→节点映射（不传递）
+        var allVennGroups = await _graphRepository.GetVennTagNodeGroupsAsync();
+
+        // 只保留用户请求的标签
+        var vennGroups = allVennGroups
+            .Where(g => tagIds.Contains(g.TagId))
+            .ToList();
+
+        // 获取包含关系（原始所有关系）
+        var allContainRelations = await _graphRepository.GetPureTagContainRelationsAsync();
+
+        // 只保留两端都在当前标签体系中的包含关系
+        var containRelations = allContainRelations
+            .Where(r => tagIds.Contains(r.ParentTagId) && tagIds.Contains(r.ChildTagId))
+            .ToList();
+
+        // 收集所有涉及的标签和节点 ID（为了查 SQL 元信息）
+        var involvedTagIds = vennGroups.Select(g => g.TagId)
+            .Union(containRelations.Select(r => r.ParentTagId))
+            .Union(containRelations.Select(r => r.ChildTagId))
+            .Distinct()
+            .ToList();
+
+        var involvedNodeIds = vennGroups
+            .SelectMany(g => g.NodeIds)
+            .Distinct()
+            .ToList();
+
+        // 获取标签名称（从 SQL）
+        var tagMetaDict = await _tagRepo.GetTagDetailsAsync(involvedTagIds);
+
+        // 获取节点名称（从 SQL）
+        var nodeMetaDict = await _knowledgeRepo.GetNodesDetailsAsync(involvedNodeIds);
+
+        // 构造 Venn 集合部分（sets）
+        var sets = vennGroups.Select(g => new
+        {
+            id = g.TagId,
+            name = tagMetaDict.TryGetValue(g.TagId, out var meta) ? meta.Name : g.TagId,
+            elements = g.NodeIds.Select(nodeId => new
+            {
+                id = nodeId,
+                name = nodeMetaDict.TryGetValue(nodeId, out var nmeta) ? nmeta.Name : nodeId
+            })
+        });
+
+        // 构造标签间的包含关系
+        var relations = containRelations.Select(r => new
+        {
+            parent = new
+            {
+                id = r.ParentTagId,
+                name = tagMetaDict.TryGetValue(r.ParentTagId, out var parentMeta) ? parentMeta.Name : r.ParentTagId
+            },
+            child = new
+            {
+                id = r.ChildTagId,
+                name = tagMetaDict.TryGetValue(r.ChildTagId, out var childMeta) ? childMeta.Name : r.ChildTagId
+            }
+        });
+
+        return new { venn = new { sets, contain_relations = relations } };
     }
 
     public async Task<IEnumerable<string>> GetAllKnowledgeNodeIdsAsync()
     {
         // 从 SQL 获取所有节点 id
-        return await _sqlRepository.GetAllNodeIdsAsync();
+        return await _knowledgeRepo.GetAllNodeIdsAsync();
     }
 
     public async Task<IEnumerable<string>> GetTagIdsByTagTypeAsync(string tagType)
     {
         // 从 SQL 获取指定标签类型的节点 id
-        return await _sqlRepository.GetTagNodeIdsByTagTypeAsync(tagType);
+        return await _tagRepo.GetTagNodeIdsByTagTypeAsync(tagType);
     }
 
     public async Task<IEnumerable<string>> GetTagIdsByTagTypeAmongNodesAsync(IEnumerable<string> nodeIds, string tagType)
     {
         // 从 SQL 获取指定节点 id 中有的指定类型的标签 id
         // 1. 从 SQL 查标签
-        var tagIds = await _sqlRepository.GetTagNodeIdsByTagTypeAsync(tagType);
+        var tagIds = await _tagRepo.GetTagNodeIdsByTagTypeAsync(tagType);
         if (!tagIds.Any())
         {
             // 没有任何符合条件的标签，直接返回空列表
@@ -53,7 +157,7 @@ public class KnowledgeGraphService
     public async Task<GraphDTO> GetKnowledgeGraphDataByNodeId(IEnumerable<string> allNodeIds, IEnumerable<string> allTagIds)
     {
         // 获取节点详情
-        var nodesDict = await _sqlRepository.GetNodesDetailsAsync(allNodeIds);
+        var nodesDict = await _knowledgeRepo.GetNodesDetailsAsync(allNodeIds);
 
         // 转换成 NodeDTO 列表
         var sqlNodes = nodesDict.Select(kvp => new NodeDTO
@@ -67,12 +171,12 @@ public class KnowledgeGraphService
         }).ToList();
 
         // 从 SQL 获取所有 Tag 信息
-        var sqlTags = await _sqlRepository.GetTagDetailsAsync(allTagIds);
+        var sqlTags = await _tagRepo.GetTagDetailsAsync(allTagIds);
 
         // 构造仅包含TagLevel节点的映射
         var tagLevelIds = await _graphRepository.GetNodeIdsByLabelAsync("TagLevel");
 
-        var sqlTagLevels = await _sqlRepository.GetTagDetailsAsync(tagLevelIds);
+        var sqlTagLevels = await _tagRepo.GetTagDetailsAsync(tagLevelIds);
 
         var tagLevelIdToName = sqlTagLevels
             .Where(t => tagLevelIds.Contains(t.Key))
@@ -181,7 +285,7 @@ public class KnowledgeGraphService
 
     public async Task<IEnumerable<string>> GetTagIdsByTagNamesAsync(IEnumerable<string> inputTagNames)
     {
-        var tags = await _sqlRepository.GetTagsByNameAsync(inputTagNames);
+        var tags = await _tagRepo.GetTagsByNameAsync(inputTagNames);
         var tagNameToId = tags.Where(t => t.Name != null).ToDictionary(t => t.Name!, t => t.Id.ToString());
 
         return inputTagNames.Select(name => tagNameToId.GetValueOrDefault(name, string.Empty));
@@ -223,140 +327,16 @@ public class KnowledgeGraphService
         return Enumerable.Empty<string>();
     }
 
-    // public async Task<List<object>> FetchKnowledgeGraphData()
-    // {
-    //     using var session = _driver.AsyncSession();
-    //     var result = await session.RunAsync(@"
-    //     // Fetch knowledge nodes and their relationships
-    //     MATCH (n)-[r]->(m)
-    //     WHERE (n:Subject OR n:Field OR n:Topic OR n:Keyword) AND
-    //           (m:Subject OR m:Field OR m:Topic OR m:Keyword)
-    //     // Optionally match resources linked to these nodes
-    //     OPTIONAL MATCH (n)-[:HAS_RESOURCE]->(nr:Resource)
-    //     OPTIONAL MATCH (m)-[:HAS_RESOURCE]->(mr:Resource)
-    //     WITH n, m, r, COLLECT(DISTINCT nr.link) AS nResources, COLLECT(DISTINCT mr.link) AS mResources
-    //     RETURN n AS sourceNode, m AS targetNode, r AS relationship, nResources, mResources
-    //     LIMIT 1000
-    // ");
-
-    //     var data = new List<object>();
-
-    //     await foreach (var record in result)
-    //     {
-    //         var sourceNode = record["sourceNode"].As<INode>();
-    //         var targetNode = record["targetNode"].As<INode>();
-    //         var relationship = record["relationship"].As<IRelationship>();
-    //         var nResources = record["nResources"].As<List<string>>();
-    //         var mResources = record["mResources"].As<List<string>>();
-
-    //         data.Add(new
-    //         {
-    //             source = new
-    //             {
-    //                 Identity = sourceNode.Id,
-    //                 Labels = sourceNode.Labels.ToList(),
-    //                 Properties = new
-    //                 {
-    //                     Name = sourceNode.Properties["name"].As<string>(),
-    //                     Description = sourceNode.Properties["description"].As<string>(),
-    //                 },
-    //                 Resources = nResources.Select(link => new { Link = link }).ToList()
-    //             },
-    //             target = new
-    //             {
-    //                 Identity = targetNode.Id,
-    //                 Labels = targetNode.Labels.ToList(),
-    //                 Properties = new
-    //                 {
-    //                     Name = targetNode.Properties["name"].As<string>(),
-    //                     Description = targetNode.Properties["description"].As<string>(),
-    //                 },
-    //                 Resources = mResources.Select(link => new { Link = link }).ToList()
-    //             },
-    //             relationship = new
-    //             {
-    //                 Identity = relationship.Id,
-    //                 Start = relationship.StartNodeId,
-    //                 End = relationship.EndNodeId,
-    //                 Type = relationship.Type
-    //             }
-    //         });
-    //     }
-
-    //     return data;
-    // }
-
     public async Task<object> SearchNodeAsync(string query)
     {
-        string lowerCaseQuery = query.ToLower();
-
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-        MATCH (n)
-        WHERE (n:Subject OR n:Topic OR n:Keyword OR n:Tag) AND toLower(n.name) CONTAINS $lowerCaseQuery
-        RETURN n, 
-               CASE WHEN toLower(n.name) STARTS WITH $lowerCaseQuery THEN 1 ELSE 0 END AS startsWithScore,
-               CASE WHEN toLower(n.name) = $lowerCaseQuery THEN 1 ELSE 0 END AS exactMatchScore
-        ORDER BY exactMatchScore DESC, startsWithScore DESC, n.name
-        LIMIT 1
-    ", new { lowerCaseQuery });
-
-        if (await result.FetchAsync())
-        {
-            var node = result.Current["n"].As<INode>();
-            return new
-            {
-                Identity = node.Id,
-                Labels = node.Labels.ToList(),
-                Properties = new
-                {
-                    Link = node.Properties.GetValueOrDefault("link", null)?.As<string>(),
-                    Name = node.Properties.GetValueOrDefault("name", null)?.As<string>(),
-                    Description = node.Properties.GetValueOrDefault("description", null)?.As<string>()
-                }
-            };
-        }
-
-        return null; // Return null if no node is found
+        int skip = 0; // Define the starting point for pagination
+        int take = 10; // Define the number of results to retrieve
+        return await _knowledgeRepo.SearchKnowledgeNodesAsync(query.ToLower(), skip, take);
     }
 
     public async Task<string> CreateNodeAsync(CreateNodeRequest request, string userId)
     {
-        if (request == null)
-            throw new ArgumentNullException(nameof(request));
-
-        if (string.IsNullOrWhiteSpace(request.Name))
-            throw new ArgumentException("Node name is required.");
-
-        using var session = _driver.AsyncSession();
-
-        // Check if the node name already exists
-        var nameExistsResult = await session.RunAsync(@"
-            MATCH (n:{request.Label})
-            WHERE toLower(n.name) = toApiModel{name.ToLower()})
-            RETURN n",
-            new { name = request.Name });
-
-        if (await nameExistsResult.FetchAsync())
-        {
-            throw new InvalidOperationException("Node name already exists.");
-        }
-
-        var result = await session.RunAsync(@"
-            CREATE (n:{request.Label} {name: $name, description: $description})
-            SET n:pending_approval
-            WITH n
-            UNWIND $link AS l
-            CREATE (r:Resource {link: l})
-            CREATE (n)-[:HAS_RESOURCE]->(r)
-            SET r:pending_approval
-            WITH n
-            MATCH (u:User {id: $userId})
-            CREATE (u)-[:CREATED]->(n)
-            RETURN n",
-            new { name = request.Name, description = request.Description, link = request.Link, userId });
-
-        return "Node created successfully.";
+        return await CreateNodeWithResourcesAsync(request, userId);
     }
 
     public async Task<bool> CreateRelationshipAsync(string sourceNodeName, string targetNodeName, string relationshipType, string userId)
@@ -380,52 +360,20 @@ public class KnowledgeGraphService
 
     public async Task<bool> ApproveNodeAsync(string nodeName)
     {
-        if (string.IsNullOrWhiteSpace(nodeName))
-            throw new ArgumentException("Node name is required.");
+        if (!Guid.TryParse(nodeName, out var nodeId))
+            throw new ArgumentException("Invalid nodeName format. Expected a valid Guid.", nameof(nodeName));
 
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-            MATCH (n)-[:HAS_RESOURCE]->(r)
-            WHERE n.name = $nodeName AND EXISTS(n.pending_approval)
-            REMOVE n:pending_approval, r:pending_approval
-            RETURN n",
-            new { nodeName });
-
-        return await result.FetchAsync(); // True if the node was found and updated
+        return await _nodeApprovalRepo.ApproveNodeAsync(nodeId);
     }
 
     public async Task<bool> DisapproveNodeAsync(string nodeName)
     {
-        if (string.IsNullOrWhiteSpace(nodeName))
-            throw new ArgumentException("Node name is required.");
-
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-            MATCH (n)-[:HAS_RESOURCE]->(r)
-            WHERE n.name = $nodeName AND EXISTS(n.pending_approval)
-            REMOVE n:pending_approval, r:pending_approval
-            SET n:disapproved, r:disapproved
-            RETURN n",
-            new { nodeName });
-
-        return await result.FetchAsync(); // True if the operation was successful
+        return await _nodeApprovalRepo.DisapproveNodeAsync(nodeName);
     }
 
     public async Task<bool> ResubmitNodeAsync(string nodeName)
     {
-        if (string.IsNullOrWhiteSpace(nodeName))
-            throw new ArgumentException("Node name is required.");
-
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-            MATCH (n)-[:HAS_RESOURCE]->(r)
-            WHERE n.name = $nodeName AND EXISTS(n.disapproved)
-            REMOVE n:disapproved, r:disapproved
-            SET n:pending_approval, r:pending​​_approval
-            RETURN n",
-            new { nodeName });
-
-        return await result.FetchAsync(); // True if the operation was successful
+        return await _nodeApprovalRepo.ResubmitNodeAsync(nodeName);
     }
 
     public async Task<bool> ApproveRelationshipAsync(string sourceNodeName, string targetNodeName, string relationshipType)
@@ -478,159 +426,63 @@ public class KnowledgeGraphService
         return await result.FetchAsync(); // True if the operation was successful
     }
 
-    public async Task<bool> AddResourceAsync(string nodeName, string link)
+    public async Task<bool> AddResourceAsync(string nodeName, string link, string resourceName = "")
     {
-        if (string.IsNullOrWhiteSpace(nodeName) || string.IsNullOrWhiteSpace(link))
-            throw new ArgumentException("Node name and link are required.");
-
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-            MATCH (n)
-            WHERE n.name = $nodeName
-            CREATE (r:Resource {link: $link})
-            CREATE (n)-[:HAS_RESOURCE]->(r)
-            SET r:pending_approval
-            RETURN n",
-            new { nodeName, link });
-
-        return await result.FetchAsync(); // True if the operation was successful
+        return await AddResourceToNodeAsync(nodeName, resourceName, link);
     }
 
-    public async Task<List<object>> GetPendingNodesAsync()
+    public async Task<List<KnowledgeNodeDraft>> GetPendingNodesAsync()
     {
-        var data = new List<object>();
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-            MATCH (u:User)-[:CREATED]->(n:pending_approval)
-            OPTIONAL MATCH (n)-[:HAS_RESOURCE]->(r:Resource)
-            RETURN n, r, u.id AS userId",
-            new { });
-
-        await foreach (var record in result)
-        {
-            var node = record["n"].As<INode>();
-            var resource = record["r"].As<INode>();
-            var userId = record["userId"].As<string>();
-
-            data.Add(new
-            {
-                Node = new
-                {
-                    Identity = node.Id,
-                    Labels = node.Labels.ToList(),
-                    Properties = new
-                    {
-                        Name = node.Properties["name"].As<string>(),
-                        Description = node.Properties["description"].As<string>()
-                    },
-                    Resource = resource != null ? new
-                    {
-                        Identity = resource.Id,
-                        Labels = resource.Labels.ToList(),
-                        Properties = new
-                        {
-                            Link = resource.Properties["link"].As<string>()
-                        }
-                    } : null
-                },
-                UserId = userId
-            });
-        }
-
-        return data;
+        return await _nodeApprovalRepo.GetPendingNodesAsync();
     }
 
-    public async Task<List<object>> GetPendingNodesByUserIdAsync(string userId)
+    public async Task<List<KnowledgeNodeDraft>> GetPendingNodesByUserIdAsync(string userId)
     {
-        var data = new List<object>();
-        using var session = _driver.AsyncSession();
-        var result = await session.RunAsync(@"
-            MATCH (u:User {id: $userId})-[:CREATED]->(n:pending_approval)
-            OPTIONAL MATCH (n)-[:HAS_RESOURCE]->(r:Resource)
-            RETURN n, r",
-            new { userId });
+        return await _nodeApprovalRepo.GetPendingNodesByUserIdAsync(userId);
+    }
 
-        await foreach (var record in result)
-        {
-            var node = record["n"].As<INode>();
-            var resource = record["r"].As<INode>();
-
-            data.Add(new
-            {
-                Node = new
-                {
-                    Identity = node.Id,
-                    Labels = node.Labels.ToList(),
-                    Properties = new
-                    {
-                        Name = node.Properties["name"].As<string>(),
-                        Description = node.Properties["description"].As<string>()
-                    },
-                    Resource = resource != null ? new
-                    {
-                        Identity = resource.Id,
-                        Labels = resource.Labels.ToList(),
-                        Properties = new
-                        {
-                            Link = resource.Properties["link"].As<string>()
-                        }
-                    } : null
-                },
-            });
-        }
-        return data;
+    public async Task<List<TagDraft>> GetPendingTagsAsync()
+    {
+        return await _nodeApprovalRepo.GetPendingTagsAsync();
+    }
+    public async Task<List<TagDraft>> GetPendingTagsByUserIdAsync(string userId)
+    {
+        return await _nodeApprovalRepo.GetPendingTagsByUserIdAsync(userId);
     }
 
     public async Task<List<int>> CountContributedNodesAndLinks(string userId)
     {
-        var data = new List<int>();
+        return await CountContributedNodesAndLinksAsync(userId);
+    }
 
-        try
-        {
-            using var session = _driver.AsyncSession();
+    public async Task<List<int>> CountContributedNodesAndLinksAsync(string userId)
+    {
+        var approvedNodes = await _nodeApprovalRepo.CountApprovedNodeDraftsAsync(userId);
+        var approvedLinks = await _graphRepository.CountApprovedLinksByUserAsync(userId);
+        return new List<int> { approvedNodes, approvedLinks };
+    }
 
-            // Query to count nodes
-            var resultNodesCursor = await session.RunAsync(@"
-            MATCH (u:User {id: $userId})-[:CREATED]->(n)
-            WHERE (n:Subject OR n:Field OR n:Topic OR n:Keyword OR n:People OR n:Works OR n:Event)
-            AND NOT (n:pending_approval)
-            RETURN COUNT(n) AS nodeCount", new { userId });
+    public async Task<string> CreateNodeWithResourcesAsync(CreateNodeRequest request, string userId)
+    {
+        // Step 1: SQL - 创建节点及其草稿
+        var nodeId = await _nodeApprovalRepo.CreateDraftAsync(request, userId);
 
-            if (!await resultNodesCursor.FetchAsync())
-            {
-                throw new Exception("Failed to fetch node count.");
-            }
+        // Step 2: Neo4j - 创建图节点及资源关系
+        await _graphRepository.CreateNodeAndResourceInGraphAsync(
+            nodeId,
+            request.Name,
+            request.Description,
+            request.Link,
+            userId
+        );
 
-            var nodeCountRecord = resultNodesCursor.Current;
-            int nodeCount = nodeCountRecord["nodeCount"].As<int>();
+        return nodeId.ToString();
+    }
 
-            // Query to count links
-            var resultLinksCursor = await session.RunAsync(@"
-            MATCH (n)-[rel {userId: $userId}]->(m)
-            WHERE (n:Subject OR n:Field OR n:Topic OR n:Keyword OR n:People OR n:Works OR n:Event) AND
-                  (m:Subject OR m:Field OR m:Topic OR m:Keyword OR m:People OR m:Works OR m:Event)
-            RETURN COUNT(rel) AS linkCount", new { userId });
-
-            if (!await resultLinksCursor.FetchAsync())
-            {
-                throw new Exception("Failed to fetch link count.");
-            }
-
-            var linkCountRecord = resultLinksCursor.Current;
-            int linkCount = linkCountRecord["linkCount"].As<int>();
-
-            data.Add(nodeCount);
-            data.Add(linkCount);
-        }
-        catch (Exception ex)
-        {
-            // Log detailed error information
-            Console.WriteLine($"Error in CountContributedNodesAndLinks: {ex.Message}");
-            Console.WriteLine($"Stack Trace: {ex.StackTrace}");
-            throw new Exception("An error occurred while counting contributed nodes and links", ex);
-        }
-
-        return data;
+    public async Task<bool> AddResourceToNodeAsync(string nodeName, string link, string resourceName)
+    {
+        var resourceId = await _resourceRepo.EnsureResourceExistsAsync(resourceName, link);
+        return await _graphRepository.LinkResourceToNodeAsync(nodeName, resourceId);
     }
 
 }

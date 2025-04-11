@@ -6,12 +6,10 @@ public class DailySummaryService
     private readonly ApplicationDbContext _context;
     private readonly StudyGroupService? _studyGroupService;
     // private readonly KnowledgeGraphService? _knowledgeGraphService;
-    private readonly ISqlRepository _sqlRepository;
-    public DailySummaryService(ApplicationDbContext context, StudyGroupService? studyGroupService, ISqlRepository sqlRepository)
+    public DailySummaryService(ApplicationDbContext context, StudyGroupService? studyGroupService)
     {
         _context = context;
         _studyGroupService = studyGroupService;
-        _sqlRepository = sqlRepository;
     }
 
     public async Task GenerateDailySummary(DateTime date)

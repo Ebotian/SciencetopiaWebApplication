@@ -20,20 +20,30 @@ namespace Sciencetopia.Data
         public DbSet<DailySummary> DailySummaries { get; set; }
         // Add the KnowledgeNodes DbSet
         public DbSet<KnowledgeNode> KnowledgeNodes { get; set; }
+        public DbSet<KnowledgeNodeDraft> KnowledgeNodeDrafts { get; set; } // New KnowledgeNodeDraft DbSet
         public DbSet<TypesOfTags> TypesOfTags { get; set; }
         public DbSet<TagTypes> TagTypes { get; set; }
         // Add the Tags DbSet
         public DbSet<Tags> Tags { get; set; }
+        public DbSet<TagDraft> TagDrafts { get; set; } // New TagDraft DbSet
         public DbSet<Favorite> Favorites { get; set; } // New Favorite DbSet
+        public DbSet<StudyGroupEntity> StudyGroups { get; set; } // New StudyGroupEntity DbSet
+        public DbSet<Resource> Resources { get; set; } // New Resource DbSet
 
         protected override void OnModelCreating(ModelBuilder builder)
         {
             base.OnModelCreating(builder);
 
-            builder.Ignore<KnowledgeNode>();
-            builder.Ignore<TagTypes>();
-            builder.Ignore<Tags>();
-            builder.Ignore<TypesOfTags>();
+            builder.Entity<Tags>().ToTable("Tags");
+            builder.Entity<TypesOfTags>().ToTable("TypesOfTags");
+            builder.Entity<TagTypes>().ToTable("TagTypes");
+            builder.Entity<KnowledgeNode>().ToTable("KnowledgeNodes");
+            builder.Entity<Resource>().ToTable("Resources");
+
+            // builder.Ignore<KnowledgeNode>();
+            // builder.Ignore<TagTypes>();
+            // builder.Ignore<Tags>();
+            // builder.Ignore<TypesOfTags>();
 
             // Configure relationships for the Message model
             builder.Entity<Message>()
@@ -88,6 +98,18 @@ namespace Sciencetopia.Data
                     .HasForeignKey(f => f.UserId)
                     .OnDelete(DeleteBehavior.Cascade);
             });
+
+            builder.Entity<TagDraft>()
+                .HasOne<Tags>()
+                .WithMany()
+                .HasForeignKey(d => d.TagId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            builder.Entity<KnowledgeNodeDraft>()
+                .HasOne<KnowledgeNode>()
+                .WithMany()
+                .HasForeignKey(d => d.NodeId)
+                .OnDelete(DeleteBehavior.Cascade);
         }
     }
 }

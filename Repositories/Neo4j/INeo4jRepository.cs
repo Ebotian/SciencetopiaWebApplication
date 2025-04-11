@@ -47,6 +47,15 @@ public interface IGraphRepository
     /// 获取所有与指定标签相关的知识节点
     /// </summary>
     Task<HashSet<string>> GetAllDescendantTagIdsAsync(IEnumerable<string> tagNames);
+
+    /// <summary>
+    /// 获取 Venn 图中标签与知识节点的分组
+    /// </summary>
+    Task<List<TagNodeGroup>> GetVennTagNodeGroupsAsync();
+    Task<List<string>> GetLinkedResourceIdsAsync(IEnumerable<string> knowledgeNodeIds);
+    Task CreateNodeAndResourceInGraphAsync(Guid nodeId, string name, string description, IEnumerable<string> links, string userId);
+    Task<int> CountApprovedLinksByUserAsync(string userId);
+    Task<bool> LinkResourceToNodeAsync(string nodeName, string resourceId);
 }
 
 public class GraphRepository : IGraphRepository
@@ -62,7 +71,7 @@ public class GraphRepository : IGraphRepository
     {
         using var session = _driver.AsyncSession();
         var cypher = @"
-            MATCH (t:Tags)-[:TAGGED_WITH]->(n:KnowledgeNode)
+            MATCH (t:Tag)-[:TAGGED_WITH]->(n:KnowledgeNode)
             RETURN n.id AS SourceId, t.id AS TagId
         ";
         var result = await session.RunAsync(cypher);
@@ -79,7 +88,7 @@ public class GraphRepository : IGraphRepository
     {
         using var session = _driver.AsyncSession();
         var cypher = @"
-        MATCH (parent:Tags)-[:CONTAIN]->(child:Tags)
+        MATCH (parent:Tag)-[:CONTAIN]->(child:Tag)
         RETURN parent.id AS ParentTagId, child.id AS ChildTagId
     ";
         var result = await session.RunAsync(cypher);
@@ -96,7 +105,7 @@ public class GraphRepository : IGraphRepository
         using var session = _driver.AsyncSession();
         // 基于纯标签节点和 TAGGED_WITH 关系投影出知识节点间共享的关系
         var cypher = @"
-            MATCH (n:KnowledgeNode)<-[:TAGGED_WITH]-(t:Tags)-[:TAGGED_WITH]->(m:KnowledgeNode)
+            MATCH (n:KnowledgeNode)<-[:TAGGED_WITH]-(t:Tag)-[:TAGGED_WITH]->(m:KnowledgeNode)
             WHERE n <> m
             WITH n, m, count(*) AS weight
             RETURN n.id AS SourceId, m.id AS TargetId, weight
@@ -143,7 +152,7 @@ public class GraphRepository : IGraphRepository
     {
         using var session = _driver.AsyncSession();
         var query = @"
-        MATCH (t:Tags)-[:TAGGED_WITH]->(n:KnowledgeNode)
+        MATCH (t:Tag)-[:TAGGED_WITH]->(n:KnowledgeNode)
         WHERE t.id IN $tagIds
         RETURN n.id AS NodeId
         ";
@@ -162,7 +171,7 @@ public class GraphRepository : IGraphRepository
     {
         using var session = _driver.AsyncSession();
         var query = @"
-        MATCH (t:Tags)-[:TAGGED_WITH]->(n:KnowledgeNode)
+        MATCH (t:Tag)-[:TAGGED_WITH]->(n:KnowledgeNode)
         WHERE n.id IN $nodeIds
         RETURN t.id AS TagId
         ";
@@ -205,7 +214,7 @@ public class GraphRepository : IGraphRepository
         if (!tagIds.Any()) return new HashSet<string>();
 
         var query = @"
-        MATCH (parent:Tags)-[:CONTAIN*]->(child:Tags)
+        MATCH (parent:Tag)-[:CONTAIN*]->(child:Tag)
         WHERE parent.id IN $tagIds
         RETURN DISTINCT child.id AS tagId";
 
@@ -216,4 +225,115 @@ public class GraphRepository : IGraphRepository
         return records.Select(record => record["tagId"].As<string>()).ToHashSet();
     }
 
+    public async Task<List<TagNodeGroup>> GetVennTagNodeGroupsAsync()
+    {
+        using var session = _driver.AsyncSession();
+        var cypher = @"
+        MATCH (t:Tag)-[:TAGGED_WITH]->(n:KnowledgeNode)
+        RETURN t.id AS TagId, n.id AS NodeId
+    ";
+
+        var result = await session.RunAsync(cypher);
+        var records = await result.ToListAsync();
+
+        return records
+            .GroupBy(r => r["TagId"].As<string>())
+            .Select(g => new TagNodeGroup
+            {
+                TagId = g.Key,
+                NodeIds = g.Select(r => r["NodeId"].As<string>()).Distinct().ToList()
+            })
+            .ToList();
+    }
+
+    public async Task<List<string>> GetLinkedResourceIdsAsync(IEnumerable<string> knowledgeNodeIds)
+    {
+        if (!knowledgeNodeIds.Any())
+            return new List<string>();
+
+        var resourceIds = new List<string>();
+
+        var session = _driver.AsyncSession();
+        var result = await session.RunAsync(@"
+        UNWIND $ids AS nodeId
+        MATCH (n:KnowledgeNode {id: nodeId})-[:HAS_RESOURCE]->(r:Resource)
+        RETURN DISTINCT r.id AS resourceId", new { ids = knowledgeNodeIds });
+
+        await foreach (var record in result)
+        {
+            var id = record["resourceId"]?.As<string>();
+            if (!string.IsNullOrWhiteSpace(id))
+                resourceIds.Add(id.ToLower());
+        }
+
+        return resourceIds;
+    }
+
+    public async Task CreateNodeAndResourceInGraphAsync(Guid nodeId, string name, string description, IEnumerable<string> links, string userId)
+    {
+        var query = @"
+        MERGE (n:KnowledgeNode {id: $nodeId})
+        SET n.name = $name, n.description = $description
+        SET n:pending_approval
+        WITH n
+        UNWIND $links AS l
+        MERGE (r:Resource {link: l})
+        SET r:pending_approval
+        MERGE (n)-[:HAS_RESOURCE {status: 'pending_approval', contributor: $userId}]->(r)
+        WITH n
+        MERGE (u:User {id: $userId})
+        MERGE (u)-[:CREATED]->(n)";
+
+        var parameters = new
+        {
+            nodeId = nodeId.ToString().ToLower(),
+            name,
+            description,
+            links = links ?? new List<string>(),
+            userId
+        };
+
+        using var session = _driver.AsyncSession();
+        await session.RunAsync(query, parameters);
+    }
+
+    public async Task<int> CountApprovedLinksByUserAsync(string userId)
+    {
+        using var session = _driver.AsyncSession();
+        var result = await session.RunAsync(@"
+            MATCH (n)-[rel]->(m)
+            WHERE rel.userId = $userId AND rel.status <> 'pending_approval'
+            RETURN COUNT(rel) AS linkCount
+        ", new { userId });
+
+        if (await result.FetchAsync())
+        {
+            return result.Current["linkCount"].As<int>();
+        }
+
+        return 0;
+    }
+
+    public async Task<bool> LinkResourceToNodeAsync(string nodeName, string resourceId)
+    {
+        var query = @"
+            MATCH (n:KnowledgeNode)
+            WHERE n.name = $nodeName
+            MERGE (r:Resource {id: $resourceId})
+            MERGE (n)-[:HAS_RESOURCE]->(r)
+            SET r.status = 'pending_approval'
+            RETURN r";
+
+        try
+        {
+            using var session = _driver.AsyncSession();
+            var result = await session.RunAsync(query, new { nodeName, resourceId });
+            return await result.FetchAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Neo4j error in LinkResourceToNodeAsync: {ex.Message}");
+            return false;
+        }
+    }
 }

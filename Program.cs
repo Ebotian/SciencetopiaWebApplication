@@ -89,7 +89,10 @@ builder.Services.AddSingleton(x =>
     return new BlobServiceClient(connectionString);
 });
 builder.Services.AddScoped<IGraphRepository, GraphRepository>();
-builder.Services.AddScoped<ISqlRepository, SqlRepository>();
+builder.Services.AddScoped<IKnowledgeNodeRepository, KnowledgeNodeRepository>();
+builder.Services.AddScoped<ITagRepository, TagRepository>();
+builder.Services.AddScoped<IResourceRepository, ResourceRepository>();
+builder.Services.AddScoped<INodeApprovalRepository, NodeApprovalRepository>();
 builder.Services.AddScoped(x => x.GetService<IDriver>().AsyncSession());
 builder.Services.AddScoped<IUserValidator<ApplicationUser>, CustomUserValidator>();
 

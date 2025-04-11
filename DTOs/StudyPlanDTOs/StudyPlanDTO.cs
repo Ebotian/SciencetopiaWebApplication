@@ -36,10 +36,3 @@ public class Lesson
     public int FinishedResourcesCount { get; set; }
     public float ProgressPercentage { get; set; }
 }
-
-public class Resource
-{
-    public string? Link { get; set; }
-    public string? Name { get; set; }
-    public bool Learned { get; set; }
-}

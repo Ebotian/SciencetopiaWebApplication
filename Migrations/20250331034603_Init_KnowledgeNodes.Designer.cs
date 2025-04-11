@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Sciencetopia.Data;
 
@@ -11,9 +12,11 @@ using Sciencetopia.Data;
 namespace SciencetopiaWebApplication.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250331034603_Init_KnowledgeNodes")]
+    partial class Init_KnowledgeNodes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -99,46 +102,6 @@ namespace SciencetopiaWebApplication.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("KnowledgeNodes", (string)null);
-                });
-
-            modelBuilder.Entity("KnowledgeNodeDraft", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Name")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid>("NodeId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ReviewComment")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<int>("ReviewStatus")
-                        .HasColumnType("int");
-
-                    b.Property<DateTimeOffset?>("ReviewedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("ReviewedBy")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTimeOffset>("SubmittedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("SubmittedBy")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("NodeId");
-
-                    b.ToTable("KnowledgeNodeDrafts");
                 });
 
             modelBuilder.Entity("Message", b =>
@@ -338,25 +301,6 @@ namespace SciencetopiaWebApplication.Migrations
                     b.ToTable("Notifications");
                 });
 
-            modelBuilder.Entity("Resource", b =>
-                {
-                    b.Property<string>("Id")
-                        .HasColumnType("nvarchar(450)");
-
-                    b.Property<bool>("Learned")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Link")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Name")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Resources", (string)null);
-                });
-
             modelBuilder.Entity("Sciencetopia.Models.ApplicationUser", b =>
                 {
                     b.Property<string>("Id")
@@ -502,46 +446,6 @@ namespace SciencetopiaWebApplication.Migrations
                     b.ToTable("StudyGroups");
                 });
 
-            modelBuilder.Entity("TagDraft", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Name")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("ReviewComment")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<int>("ReviewStatus")
-                        .HasColumnType("int");
-
-                    b.Property<DateTimeOffset?>("ReviewedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("ReviewedBy")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTimeOffset>("SubmittedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("SubmittedBy")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid>("TagId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TagId");
-
-                    b.ToTable("TagDrafts");
-                });
-
             modelBuilder.Entity("TagTypes", b =>
                 {
                     b.Property<Guid>("TagId")
@@ -626,15 +530,6 @@ namespace SciencetopiaWebApplication.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("VisitLogs");
-                });
-
-            modelBuilder.Entity("KnowledgeNodeDraft", b =>
-                {
-                    b.HasOne("KnowledgeNode", null)
-                        .WithMany()
-                        .HasForeignKey("NodeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Message", b =>
@@ -729,15 +624,6 @@ namespace SciencetopiaWebApplication.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("TagDraft", b =>
-                {
-                    b.HasOne("Tags", null)
-                        .WithMany()
-                        .HasForeignKey("TagId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("VisitLog", b =>

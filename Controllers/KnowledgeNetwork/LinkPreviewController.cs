@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using HtmlAgilityPack;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
+using PdfSharp.Charting;
 
 [Route("api/[controller]")]
 [ApiController]
@@ -21,7 +22,7 @@ public class LinkPreviewController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> Get(string url)
+    public async Task<IActionResult> Get(string url, string? title = null)
     {
         var extractedUrl = ExtractURL(url);
         if (extractedUrl == null)
@@ -36,21 +37,25 @@ public class LinkPreviewController : ControllerBase
             return NotFound("Failed to fetch the URL.");
         }
 
+        // If the content is PDF and title was not provided, extract from PDF
         if (response.Content.Headers.ContentType?.MediaType == "application/pdf")
         {
             var pdfStream = await response.Content.ReadAsStreamAsync();
-            string pdfTitle;
+            string pdfTitle = title ?? string.Empty;
 
-            if (extractedUrl.AbsolutePath.EndsWith(".pdf"))
+            if (title == null)
             {
-                pdfTitle = await ExtractTitleFromPdfUsingTika(pdfStream);
-            }
-            else
-            {
-                pdfTitle = ExtractTitleFromPdfMetadata(pdfStream);
-                if (string.IsNullOrEmpty(pdfTitle))
+                if (extractedUrl.AbsolutePath.EndsWith(".pdf"))
                 {
                     pdfTitle = await ExtractTitleFromPdfUsingTika(pdfStream);
+                }
+                else
+                {
+                    pdfTitle = ExtractTitleFromPdfMetadata(pdfStream);
+                    if (string.IsNullOrEmpty(pdfTitle))
+                    {
+                        pdfTitle = await ExtractTitleFromPdfUsingTika(pdfStream);
+                    }
                 }
             }
 
@@ -62,6 +67,7 @@ public class LinkPreviewController : ControllerBase
             return Ok(pdfPreview);
         }
 
+        // Handle HTML content
         var contentBytes = await response.Content.ReadAsByteArrayAsync();
         var utf8String = Encoding.UTF8.GetString(contentBytes);
 
@@ -80,10 +86,12 @@ public class LinkPreviewController : ControllerBase
             doc.LoadHtml(correctString);
         }
 
-        var title = doc.DocumentNode.SelectSingleNode("//meta[@property='og:title']")?.GetAttributeValue("content", string.Empty);
-        if (string.IsNullOrEmpty(title))
+        string extractedTitle = title ??
+            doc.DocumentNode.SelectSingleNode("//meta[@property='og:title']")?.GetAttributeValue("content", string.Empty)
+            ?? string.Empty;
+        if (string.IsNullOrEmpty(extractedTitle) && title == null)
         {
-            title = doc.DocumentNode.SelectSingleNode("//title")?.InnerText;
+            extractedTitle = doc.DocumentNode.SelectSingleNode("//title")?.InnerText ?? string.Empty;
         }
 
         var description = doc.DocumentNode.SelectSingleNode("//meta[@property='og:description']")?.GetAttributeValue("content", string.Empty);
@@ -96,7 +104,7 @@ public class LinkPreviewController : ControllerBase
 
         var preview = new
         {
-            Title = title,
+            Title = extractedTitle,
             Description = description,
             Image = image
         };

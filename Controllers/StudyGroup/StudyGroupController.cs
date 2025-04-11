@@ -138,7 +138,7 @@ public class StudyGroupController : ControllerBase
         }
         else
         {
-            return BadRequest("同名学习小组已经存在。");
+            return BadRequest("创建学习小组的申请失败！请检查小组名称是否已存在或其他错误。");
         }
     }
 
